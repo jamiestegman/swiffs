@@ -190,8 +190,12 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             // Keep the expansion state across hydration.
             let expanded = self.expandedHunks
             self.render(fileDiff: hydrated, expandedHunks: expanded)
+            self.onDiffHydrated?(hydrated)
         }
     }
+
+    /// Called after `loadDiffFiles` hydrated the diff.
+    public var onDiffHydrated: ((FileDiffMetadata) -> Void)?
 
     public func expandedRegion(for hunkIndex: Int) -> HunkExpansionRegion {
         expandedHunks[hunkIndex] ?? .default

@@ -167,6 +167,9 @@ public final class CodeView<Metadata>: NSView {
     public var getEditStateKey: ((Item) -> String?)?
     /// Called on every item edit (`onItemEditChange`).
     public var onItemEditChange: ((DiffsEditorChangeEvent, CodeViewItemContext) -> Void)?
+    /// Loads full files for partial (patch) diff items so their context can
+    /// expand (`loadDiffFiles`).
+    public var loadDiffFiles: ((FileDiffMetadata, CodeViewItemContext) async throws -> DiffLoadedFiles)?
     /// Decides whether a finished item edit installs (`onItemEditComplete`).
     /// Update the item with the result to keep it.
     public var onItemEditComplete: ((CodeViewItemEditComplete<Metadata>, CodeViewItemContext) -> EditCompletionDecision)?
@@ -765,6 +768,13 @@ public final class CodeView<Metadata>: NSView {
             DispatchQueue.main.async { self.refreshMeasuredHeights() }
         }
         view.onPostRender = onPostRender.map { handler in { handler($0, context) } }
+        view.loadDiffFiles = loadDiffFiles.map { loader in { diff in try await loader(diff, context) } }
+        view.onDiffHydrated = { [weak self] hydrated in
+            guard let self, let index = self.indexByID[id], case .diff(_, let annotations) = self.states[index].item.content else { return }
+            // Keep the hydrated diff so remounts render it.
+            self.states[index].item.content = .diff(hydrated, annotations: annotations)
+            self.states[index].expandedHunks = view.expandedHunksMap
+        }
     }
 
     private func configure(_ view: FileView<Metadata>, context: CodeViewItemContext) {

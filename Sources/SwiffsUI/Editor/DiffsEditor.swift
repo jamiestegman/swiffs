@@ -16,12 +16,53 @@ public struct DiffsEditorOptions {
     public var matchBrackets = true
     /// Round the corners of selection ranges.
     public var roundedSelection = true
+    /// Show `renderSelectionAction` after a user-created selection
+    /// (`enabledSelectionAction`). Programmatic selections never open it.
+    public var enabledSelectionAction = false
+    /// Reads paste text instead of the general pasteboard (`clipboard`).
+    public var clipboard: DiffsEditorClipboard?
     public var autoSurround: AutoSurround = .default
     public var languageCommentConfig: [String: LanguageConfig]?
     /// Inline edit prediction (`editPrediction`).
     public var editPrediction: DiffsEditPredictionOptions?
 
     public init() {}
+}
+
+/// Where `focus(_:)` places the caret (`EditorFocusOptions`).
+public struct DiffsEditorFocusOptions: Hashable, Sendable {
+    public enum Line: Hashable, Sendable {
+        /// A one-based document line number.
+        case number(Int)
+        /// The first editable line whose top is visible.
+        case firstVisible
+    }
+
+    public var lineNumber: Line?
+    /// Zero-based character for `.number` lines.
+    public var character: Int
+    /// Points below the top of the visible area for `.firstVisible`.
+    public var offset: CGFloat
+    public var preventScroll: Bool
+
+    public init(lineNumber: Line? = nil, character: Int = 0, offset: CGFloat = 0, preventScroll: Bool = false) {
+        self.lineNumber = lineNumber
+        self.character = character
+        self.offset = offset
+        self.preventScroll = preventScroll
+    }
+}
+
+/// A custom clipboard source for paste (`clipboard.readText`). `type` is nil
+/// for plain text, or the multi-selection type
+/// `application/vnd.pierre.diffs-selections+json` whose value is a JSON array
+/// with one string per selection.
+public struct DiffsEditorClipboard: Sendable {
+    public var readText: @MainActor @Sendable (_ type: String?) async -> String
+
+    public init(readText: @escaping @MainActor @Sendable (_ type: String?) async -> String) {
+        self.readText = readText
+    }
 }
 
 /// Inline edit prediction configuration.
@@ -57,12 +98,16 @@ public struct DiffsEditPredictionOptions {
 public struct DiffsEditorCaret {
     public var anchor: Position
     public var focus: Position
+    /// Tints the selection highlight (`metadata.color`).
     public var color: NSColor
+    /// Caller data for `renderCaret`, such as a collaborator's name.
+    public var metadata: AnyHashable?
 
-    public init(anchor: Position, focus: Position, color: NSColor) {
+    public init(anchor: Position, focus: Position, color: NSColor, metadata: AnyHashable? = nil) {
         self.anchor = anchor
         self.focus = focus
         self.color = color
+        self.metadata = metadata
     }
 }
 
@@ -170,6 +215,16 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     /// Renders a floating view after a user-created selection
     /// (`renderSelectionAction` with `enabledSelectionAction`).
     public var renderSelectionAction: ((DiffsSelectionActionContext) -> NSView?)?
+    /// Renders an externally owned caret at its document position
+    /// (`renderCaret`). Carets set with `setCarets` and their selection
+    /// highlights show only while this is set.
+    public var renderCaret: ((DiffsEditorCaret) -> NSView)? {
+        didSet {
+            removeCaretViews()
+            layoutCaretViews()
+            host?.editorGrid.needsDisplay = true
+        }
+    }
 
     public private(set) var document: TextDocument<Annotation>?
     public private(set) var selections: [EditorSelection] = []
@@ -188,6 +243,8 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     private var columnDrag: (anchor: Position, startX: CGFloat)?
     private var reservedSelections: [EditorSelection]?
     private var carets: [(caret: DiffsEditorCaret, anchorOffset: Int, focusOffset: Int)] = []
+    /// Rendered remote carets, parallel to `carets`.
+    private var caretViews: [NSView?] = []
     private var markerPopover: EditorPopoverView?
     private var markerPopoverIndex: Int?
     private var pendingMarkerIndex: Int?
@@ -213,6 +270,9 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     public let editStateKey: String?
     /// Observes completion events (`onComplete`).
     public var onComplete: ((Any) -> Void)?
+    /// Called once the editor is attached and its view is rendered
+    /// (`onAttach`); the view is the `FileView` or `FileDiffView`.
+    public var onAttach: ((DiffsEditor, NSView) -> Void)?
 
     /// The session this editor edits (`#editSession`).
     private var editSession: DiffsEditState<Annotation>?
@@ -324,6 +384,15 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         tokenizer.prebuildStateStack()
         if let retainedView { applyViewState(retainedView) }
         checkpointEditSessionState()
+        // Deferred until the synchronized view is usable, like upstream's
+        // queued render callback.
+        let attachedDocument = document
+        DispatchQueue.main.async { [weak self, weak host] in
+            MainActor.assumeIsolated {
+                guard let self, let host, self.host === host, self.document === attachedDocument, let view = host as? NSView else { return }
+                self.onAttach?(self, view)
+            }
+        }
     }
 
     /// `getEditSession`: the keyed, initial, previous or a new session.
@@ -410,6 +479,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         closeSelectionAction()
         cancelPrediction()
         if !recycle { predictionHistory = [] }
+        removeCaretViews()
         carets = []
     }
 
@@ -487,10 +557,50 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     /// Shows externally owned carets (`setCarets`); they follow edits.
     public func setCarets(_ carets: [DiffsEditorCaret]) {
         guard let document else { return }
+        removeCaretViews()
         self.carets = carets.map { caret in
-            (caret, document.offsetAt(caret.anchor), document.offsetAt(caret.focus))
+            var caret = caret
+            caret.anchor = document.normalizePosition(caret.anchor)
+            caret.focus = document.normalizePosition(caret.focus)
+            return (caret, document.offsetAt(caret.anchor), document.offsetAt(caret.focus))
         }
+        layoutCaretViews()
         host?.editorGrid.needsDisplay = true
+    }
+
+    private func removeCaretViews() {
+        for view in caretViews { view?.removeFromSuperview() }
+        caretViews = []
+    }
+
+    /// Places caret views at their focus positions, dropping those whose line
+    /// is not rendered (`#renderCarets`).
+    private func layoutCaretViews() {
+        guard let renderCaret, let host else {
+            removeCaretViews()
+            return
+        }
+        let grid = host.editorGrid
+        if caretViews.count != carets.count {
+            removeCaretViews()
+            caretViews = Array(repeating: nil, count: carets.count)
+        }
+        for (index, entry) in carets.enumerated() {
+            guard let rect = grid.editorCaretRect(entry.caret.focus) else {
+                caretViews[index]?.removeFromSuperview()
+                caretViews[index] = nil
+                continue
+            }
+            let view = caretViews[index] ?? renderCaret(entry.caret)
+            if view.superview !== grid { grid.addSubview(view) }
+            if view.frame.size == .zero { view.setFrameSize(view.fittingSize) }
+            view.setFrameOrigin(rect.origin)
+            caretViews[index] = view
+        }
+    }
+
+    func editorLayoutOverlayViews() {
+        layoutCaretViews()
     }
 
     public func setMarkers(_ markers: [Marker]) {
@@ -505,15 +615,36 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     }
 
     /// Focuses the editor, optionally placing the caret (`focus`).
+    /// `line` is zero-based; see `focus(_:)` for upstream's options.
     public func focus(line: Int? = nil, character: Int = 0) {
+        focus(DiffsEditorFocusOptions(lineNumber: line.map { .number($0 + 1) }, character: character))
+    }
+
+    /// Focuses the editor (`focus(options)`): at a one-based line, at the
+    /// first editable line whose top is visible, or at the primary selection.
+    public func focus(_ options: DiffsEditorFocusOptions) {
         guard let host else { return }
-        if let line, let document {
-            let position = document.normalizePosition(Position(line: line, character: character))
-            host.editorRevealLine(position.line)
+        let grid = host.editorGrid
+        if let lineNumber = options.lineNumber {
+            guard let document else { return }
+            let target: Int?
+            let character: Int
+            switch lineNumber {
+            case .number(let number):
+                target = number
+                character = options.character
+            case .firstVisible:
+                target = grid.firstVisibleEditorLine(offset: options.offset).map { $0 + 1 }
+                character = 0
+            }
+            guard let target else { return }
+            let position = document.normalizePosition(Position(line: target - 1, character: character))
+            canMountSelectionAction = false
             updateSelections([EditorSelection(caret: position)])
+            host.editorRevealLine(position.line)
         }
-        host.editorGrid.window?.makeFirstResponder(host.editorGrid)
-        host.editorGrid.scrollEditorCaretToVisible()
+        grid.window?.makeFirstResponder(grid)
+        if !options.preventScroll { grid.scrollEditorCaretToVisible() }
     }
 
     public func blur() {
@@ -667,6 +798,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         host.editorGrid.scrollEditorCaretToVisible()
         host.editorGrid.restartCaretBlink()
         host.editorGrid.needsDisplay = true
+        layoutCaretViews()
         host.editorGrid.postEditorAccessibilityNotification(.valueChanged)
         if let file = getFile() {
             onChange?(DiffsEditorChangeEvent(changes: change.changes, file: file))
@@ -1251,16 +1383,14 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
             overlays.append(GridEditorOverlay(range: marker.range, kind: .marker(marker.severity)))
         }
         overlays.append(contentsOf: predictionOverlays)
-        for entry in carets where entry.caret.anchor != entry.caret.focus {
-            let start = min(entry.caret.anchor, entry.caret.focus)
-            let end = max(entry.caret.anchor, entry.caret.focus)
-            overlays.append(GridEditorOverlay(range: DocumentRange(start: start, end: end), kind: .remoteSelection(entry.caret.color.cgColor)))
+        if renderCaret != nil {
+            for entry in carets where entry.anchorOffset != entry.focusOffset {
+                let start = min(entry.caret.anchor, entry.caret.focus)
+                let end = max(entry.caret.anchor, entry.caret.focus)
+                overlays.append(GridEditorOverlay(range: DocumentRange(start: start, end: end), kind: .remoteSelection(entry.caret.color.cgColor, focus: entry.caret.focus)))
+            }
         }
         return overlays
-    }
-
-    var editorRemoteCarets: [(position: Position, color: CGColor)] {
-        carets.map { ($0.caret.focus, $0.caret.color.cgColor) }
     }
 
     var editorSelectionColor: CGColor? {
@@ -1631,7 +1761,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
 
     private func showSelectionActionIfNeeded() {
         closeSelectionAction()
-        guard canMountSelectionAction, let renderSelectionAction, let host, let document,
+        guard options.enabledSelectionAction, canMountSelectionAction, let renderSelectionAction, let host, let document,
               let primary = selections.last, !primary.isCollapsed
         else { return }
         let context = DiffsSelectionActionContext(
@@ -1687,13 +1817,17 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
                 pasteboard.setData(data, forType: Self.multiSelectionType)
             }
         case .paste:
+            if let clipboard = options.clipboard {
+                pasteFromCustomClipboard(clipboard)
+                return
+            }
             guard let text = pasteboard.string(forType: .string) else { return }
             if selections.count > 1, let data = pasteboard.data(forType: Self.multiSelectionType),
                let texts = try? JSONDecoder().decode([String].self, from: data), texts.count == selections.count
             {
                 replaceSelectionText(.perSelection(texts.map(document.normalizeEol)), undoBoundary: true, documentOrder: true)
             } else {
-                replaceSelectionText(.single(document.normalizeEol(text)), undoBoundary: true)
+                replaceSelectionText(.single(document.normalizeEol(text)), undoBoundary: true, documentOrder: true)
             }
         case .selectAll:
             runCommand(.selectAll)
@@ -1704,11 +1838,34 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         }
     }
 
+    /// `#handleCustomPasteEvent`.
+    private func pasteFromCustomClipboard(_ clipboard: DiffsEditorClipboard) {
+        let selectionCount = selections.count
+        let attachedDocument = document
+        Task { @MainActor [weak self] in
+            var text = await clipboard.readText(nil)
+            var texts: [String]?
+            if selectionCount > 1 {
+                let json = await clipboard.readText(Self.multiSelectionType.rawValue)
+                if let decoded = try? JSONDecoder().decode([String].self, from: Data(json.utf8)), decoded.count == selectionCount {
+                    texts = decoded
+                }
+            }
+            guard let self, let document = self.document, document === attachedDocument else { return }
+            if let texts {
+                self.replaceSelectionText(.perSelection(texts.map(document.normalizeEol)), undoBoundary: true, documentOrder: true)
+            } else {
+                text = document.normalizeEol(text)
+                self.replaceSelectionText(.single(text), undoBoundary: true, documentOrder: true)
+            }
+        }
+    }
+
     func editorCanPerform(_ action: GridEditorAction) -> Bool {
         switch action {
         case .undo: return canUndo
         case .redo: return canRedo
-        case .paste: return NSPasteboard.general.string(forType: .string) != nil
+        case .paste: return options.clipboard != nil || NSPasteboard.general.string(forType: .string) != nil
         default: return document != nil
         }
     }

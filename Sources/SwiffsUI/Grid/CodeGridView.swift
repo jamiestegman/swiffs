@@ -375,6 +375,7 @@ final class CodeGridView: NSView {
                 height: rowHeights[key.row]
             )
         }
+        editing.client?.editorLayoutOverlayViews()
     }
 
     /// Re-measures annotation views (call after their content changes).
@@ -1493,6 +1494,7 @@ final class CodeGridView: NSView {
     func setScrollX(_ value: CGFloat) {
         if maxScrollX == 0 { measureAllLineWidths() }
         scrollX = max(0, min(value, maxScrollX))
+        layoutAnnotationViews()
         needsDisplay = true
     }
 

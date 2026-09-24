@@ -213,6 +213,13 @@ func run() throws {
             }
             _ = editor.edit(fileView)
             let colors: [NSColor] = [.systemPink, .systemPurple, .systemOrange]
+            let lineHeight: CGFloat = 20
+            editor.renderCaret = { caret in
+                let bar = NSView(frame: CGRect(x: 0, y: 0, width: 2, height: lineHeight))
+                bar.wantsLayer = true
+                bar.layer?.backgroundColor = caret.color.cgColor
+                return bar
+            }
             editor.setCarets((testCase.carets ?? []).enumerated().map { index, c in
                 DiffsEditorCaret(anchor: Position(line: c[0], character: c[1]), focus: Position(line: c[2], character: c[3]), color: colors[index % colors.count])
             })

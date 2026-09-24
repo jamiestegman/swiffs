@@ -13,7 +13,8 @@ struct GridEditorOverlay: Equatable {
         case activeSearchMatch
         case bracketMatch
         case marker(MarkerSeverity)
-        case remoteSelection(CGColor)
+        /// A collaborator's selection; `focus` is where its caret sits.
+        case remoteSelection(CGColor, focus: Position)
         case predictionDeletion
     }
 
@@ -28,8 +29,6 @@ protocol GridEditorClient: AnyObject {
     var editorSide: AnnotationSide { get }
     var editorSelections: [EditorSelection] { get }
     var editorOverlays: [GridEditorOverlay] { get }
-    /// Remote carets: position and color.
-    var editorRemoteCarets: [(position: Position, color: CGColor)] { get }
     var editorSelectionColor: CGColor? { get }
     var editorCaretColor: CGColor? { get }
     /// Theme colors for search matches (`editor.findMatchHighlightBackground`)
@@ -69,6 +68,9 @@ protocol GridEditorClient: AnyObject {
     func editorModifiersChanged(_ flags: NSEvent.ModifierFlags)
     func editorPerform(_ action: GridEditorAction)
     func editorCanPerform(_ action: GridEditorAction) -> Bool
+    /// Positions views that track document positions (remote carets) after
+    /// the grid's layout or horizontal scroll changes.
+    func editorLayoutOverlayViews()
 }
 
 enum GridEditorAction {
@@ -131,6 +133,23 @@ extension CodeGridView {
         let lineHeight = style.lineHeight
         let top = rowTops[location.row] + CGFloat(visualLine) * lineHeight
         return CGRect(x: textOriginX(for: geometry) + x, y: top, width: 2, height: lineHeight)
+    }
+
+    /// The first editable document line whose row top is within the visible
+    /// area, `offset` points below its top (`#getFirstVisibleLineNumber`).
+    func firstVisibleEditorLine(offset: CGFloat) -> Int? {
+        guard let client = editing.client else { return nil }
+        let visible = visibleRect
+        let top = visible.minY + max(0, offset.isFinite ? offset : 0)
+        guard visible.maxY > top else { return nil }
+        for (rowIndex, rowTop) in rowTops.enumerated() where rowTop >= top && rowTop < visible.maxY && rowHeights[rowIndex] > 0 {
+            for column in columns.indices {
+                if let line = textLine(row: rowIndex, column: column), line.side == client.editorSide, line.lineType != .changeDeletion {
+                    return line.lineIndex
+                }
+            }
+        }
+        return nil
     }
 
     /// Document position under a point, snapping to the nearest editable line.
@@ -252,9 +271,11 @@ extension CodeGridView {
             case .activeSearchMatch:
                 context.setFillColor(NSColor.findHighlightColor.cgColor)
                 context.fill(rects)
-            case .remoteSelection(let color):
-                context.setFillColor(color.copy(alpha: 0.25) ?? color)
-                context.fill(rects)
+            case .remoteSelection(let color, let focus):
+                // `color-mix(in srgb, <color> 32%, transparent)`.
+                context.setFillColor(color.copy(alpha: color.alpha * 0.32) ?? color)
+                let blocks = editorRangeRects(overlay.range, line: line, row: row, column: column, extendsPastLineEnd: true).filter { $0.width > 0 }
+                drawSelectionBlocks(blocks, range: overlay.range, line: line, rounded: client.editorRoundedSelection, connectedCaret: focus, context: context)
             case .predictionDeletion:
                 context.setFillColor(style.cgColor(style.palette.deletionBase.withAlpha(0.25)))
                 context.fill(rects)
@@ -264,19 +285,27 @@ extension CodeGridView {
         context.setFillColor(selectionColor)
         for selection in client.editorSelections where !selection.isCollapsed {
             let rects = editorRangeRects(selection.range, line: line, row: row, column: column, extendsPastLineEnd: true).filter { $0.width > 0 }
-            guard client.editorRoundedSelection else {
-                context.fill(rects)
-                continue
-            }
-            let previous = selectionBlocks(selection.range, docLine: line.lineIndex - 1).last
-            let next = selectionBlocks(selection.range, docLine: line.lineIndex + 1).first
-            for (index, rect) in rects.enumerated() {
-                let before = index > 0 ? rects[index - 1] : previous
-                let after = index + 1 < rects.count ? rects[index + 1] : next
-                drawRoundedSelectionBlock(rect, previous: before, next: after, context: context)
-            }
+            drawSelectionBlocks(rects, range: selection.range, line: line, rounded: client.editorRoundedSelection, connectedCaret: nil, context: context)
         }
         context.restoreGState()
+    }
+
+    /// Fills a line's selection blocks, rounded like upstream when enabled.
+    /// Edges meeting `connectedCaret` stay square.
+    private func drawSelectionBlocks(_ rects: [CGRect], range: DocumentRange, line: RenderedLine, rounded: Bool, connectedCaret: Position?, context: CGContext) {
+        guard rounded else {
+            context.fill(rects)
+            return
+        }
+        let previous = selectionBlocks(range, docLine: line.lineIndex - 1).last
+        let next = selectionBlocks(range, docLine: line.lineIndex + 1).first
+        let startsAtCaret = connectedCaret == range.start && line.lineIndex == range.start.line
+        let endsAtCaret = connectedCaret == range.end && line.lineIndex == range.end.line
+        for (index, rect) in rects.enumerated() {
+            let before = index > 0 ? rects[index - 1] : previous
+            let after = index + 1 < rects.count ? rects[index + 1] : next
+            drawRoundedSelectionBlock(rect, previous: before, next: after, squareStart: startsAtCaret && index == 0, squareEnd: endsAtCaret && index == rects.count - 1, context: context)
+        }
     }
 
     /// Selection blocks (one per visual line) of a document line.
@@ -291,7 +320,7 @@ extension CodeGridView {
     /// free corners are rounded, corners joined to the neighboring visual
     /// lines are square, and steps between them get concave fillets
     /// (`#renderSelectionBlock` / `addRadiusStyle`).
-    private func drawRoundedSelectionBlock(_ block: CGRect, previous: CGRect?, next: CGRect?, context: CGContext) {
+    private func drawRoundedSelectionBlock(_ block: CGRect, previous: CGRect?, next: CGRect?, squareStart: Bool = false, squareEnd: Bool = false, context: CGContext) {
         let radius: CGFloat = 3
         // A block joins the one above unless it ends before that one starts.
         func joins(_ lower: CGRect, below upper: CGRect) -> Bool { lower.maxX > upper.minX }
@@ -303,6 +332,16 @@ extension CodeGridView {
         if let next, joins(next, below: block) {
             bottomLeft = false
             if next.maxX >= block.maxX { bottomRight = false }
+        }
+        // A collaborator's selection meets its caret here: keep the seam
+        // square.
+        if squareStart {
+            topLeft = false
+            bottomLeft = false
+        }
+        if squareEnd {
+            topRight = false
+            bottomRight = false
         }
         context.addPath(roundedRectPath(block, radius: radius, topLeft: topLeft, topRight: topRight, bottomLeft: bottomLeft, bottomRight: bottomRight))
         context.fillPath()
@@ -363,12 +402,6 @@ extension CodeGridView {
             let color = style.cgColor(style.palette.fg.withAlpha(style.palette.fg.a * 0.45))
             let textLine = makeTextLine(ghost.text, font: style.regularFont, color: color)
             drawTextLine(textLine, in: context, x: rect.minX, baseline: rect.minY + style.baseline)
-        }
-        for caret in client.editorRemoteCarets where caret.position.line == line.lineIndex {
-            if let rect = editorCaretRect(caret.position) {
-                context.setFillColor(caret.color)
-                context.fill(rect)
-            }
         }
         if editing.isFocused, editing.caretVisible {
             context.setFillColor(client.editorCaretColor ?? style.cgColor(style.palette.fg))

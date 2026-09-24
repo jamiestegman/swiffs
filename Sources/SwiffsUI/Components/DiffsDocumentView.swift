@@ -174,6 +174,25 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
         onHeightChange?(preferredHeight(forWidth: bounds.width))
     }
 
+    // MARK: Text selection
+
+    /// The text currently selected in the code (nil when nothing is
+    /// selected).
+    public var selectedText: String? {
+        guard let selection = grid.textSelection, !selection.isEmpty else { return nil }
+        return grid.selectedText(selection)
+    }
+
+    /// Copies the selected text to the general pasteboard.
+    public func copySelection() {
+        grid.copy(nil)
+    }
+
+    /// Clears the text selection.
+    public func clearTextSelection() {
+        grid.clearTextSelection()
+    }
+
     // MARK: GridLineProvider
 
     func line(side: AnnotationSide, lineIndex: Int) -> HighlightedLine {

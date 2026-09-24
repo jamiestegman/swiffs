@@ -83,6 +83,9 @@ final class CodeGridView: NSView {
     private var hoveredToken: DiffsTokenEvent?
     private var hoveredExpand: GridHit?
     private var hoveredMergeAction: GridHit?
+    /// Native text selection (see `CodeGridView+TextSelection.swift`).
+    var textSelection: GridTextSelection?
+    private var textDrag: (column: Int, lower: GridTextPosition, upper: GridTextPosition, granularity: TextSelectionGranularity, moved: Bool)?
     private(set) var selectedRange: SelectedLineRange?
     private var proposedRange: SelectedLineRange??
     private var selectionAnchor: SelectionPoint?
@@ -141,6 +144,7 @@ final class CodeGridView: NSView {
             maxTextWidth.removeAll()
         }
         if rowsChanged {
+            textSelection = nil
             for view in annotationViews.values { view.removeFromSuperview() }
             annotationViews.removeAll()
             annotationHeights.removeAll()
@@ -257,7 +261,7 @@ final class CodeGridView: NSView {
         return max(style.ch * 4, column.contentWidth - contentPaddingStart - contentPaddingEnd)
     }
 
-    fileprivate func layout(for line: RenderedLine, column: ColumnGeometry) -> LineLayout {
+    func layout(for line: RenderedLine, column: ColumnGeometry) -> LineLayout {
         let key = LineKey(side: line.side, lineIndex: line.lineIndex, dimmed: false)
         if let cached = lineLayouts[key] { return cached }
         let highlighted = lineProvider?.line(side: line.side, lineIndex: line.lineIndex) ?? HighlightedLine(text: "", tokens: [])
@@ -538,6 +542,14 @@ final class CodeGridView: NSView {
             contentState.mergeConflict = tint
             numberState.mergeConflict = tint
             fill(contentRect, palette.background(for: .line, state: contentState), context)
+            let selectionRects = textSelectionRects(row: row, column: columnIndex, top: top)
+            if !selectionRects.isEmpty {
+                context.saveGState()
+                context.clip(to: contentRect)
+                context.setFillColor(textSelectionColor)
+                context.fill(selectionRects)
+                context.restoreGState()
+            }
             drawLineText(line, column: column, top: top, contentRect: contentRect, context: context)
             fill(gutterRect, palette.background(for: .lineNumber, state: numberState), context)
             drawIndicator(for: visualType, gutterRect: gutterRect, contentRect: contentRect, context: context)
@@ -1209,9 +1221,41 @@ final class CodeGridView: NSView {
             updateSelection(to: point, emitChange: false)
             delegate?.grid(self, selectionEvent: currentSelectionRange, phase: .start)
             pointerSession = .selecting
+        case .line(_, let columnIndex, _, false):
+            beginTextDrag(at: point, column: columnIndex, clickCount: event.clickCount, extend: event.modifierFlags.contains(.shift))
         default:
+            clearTextSelection()
             super.mouseDown(with: event)
         }
+    }
+
+    private func beginTextDrag(at point: CGPoint, column: Int, clickCount: Int, extend: Bool) {
+        guard let position = textPosition(at: point, column: column) else { return }
+        window?.makeFirstResponder(self)
+        let granularity: TextSelectionGranularity = clickCount >= 3 ? .line : clickCount == 2 ? .word : .character
+        if extend, let existing = textSelection, existing.column == column {
+            textSelection = GridTextSelection(column: column, anchor: existing.anchor, focus: position)
+            textDrag = (column, existing.anchor, existing.anchor, .character, true)
+            needsDisplay = true
+            return
+        }
+        let (lower, upper) = textRange(around: position, column: column, granularity: granularity)
+        textDrag = (column, lower, upper, granularity, granularity != .character)
+        textSelection = granularity == .character ? nil : GridTextSelection(column: column, anchor: lower, focus: upper)
+        needsDisplay = true
+    }
+
+    private func extendTextDrag(to point: CGPoint) {
+        guard var drag = textDrag, let position = textPosition(at: point, column: drag.column) else { return }
+        drag.moved = true
+        textDrag = drag
+        let (lower, upper) = textRange(around: position, column: drag.column, granularity: drag.granularity)
+        if position < drag.lower {
+            textSelection = GridTextSelection(column: drag.column, anchor: drag.upper, focus: lower)
+        } else {
+            textSelection = GridTextSelection(column: drag.column, anchor: drag.lower, focus: max(upper, drag.upper))
+        }
+        needsDisplay = true
     }
 
     private func utilityBottomPoint() -> SelectionPoint? {
@@ -1223,6 +1267,10 @@ final class CodeGridView: NSView {
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         autoscroll(with: event)
+        if textDrag != nil {
+            extendTextDrag(to: point)
+            return
+        }
         guard let (selection, _) = selectionPointForDrag(at: point) else { return }
         switch pointerSession {
         case .idle:
@@ -1258,6 +1306,15 @@ final class CodeGridView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if let drag = textDrag {
+            textDrag = nil
+            if drag.moved {
+                // A drag that selected text is not a click.
+                if textSelection?.isEmpty == true { textSelection = nil }
+                return
+            }
+            clearTextSelection()
+        }
         switch pointerSession {
         case .idle:
             handleClick(at: point, event: event)

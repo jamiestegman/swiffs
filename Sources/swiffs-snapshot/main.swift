@@ -68,6 +68,8 @@ struct Case: Decodable {
     var selectedLines: SelectedLineRange?
     /// Points (in view coordinates, top-left origin) clicked before capture.
     var clicks: [[Double]]?
+    /// Drags `[x0, y0, x1, y1, clickCount?]`; the selected text is printed.
+    var drags: [[Double]]?
 }
 
 @MainActor
@@ -179,6 +181,33 @@ func run() throws {
             view.frame = CGRect(x: 0, y: 0, width: width, height: newHeight)
             window.setContentSize(view.frame.size)
             view.layoutSubtreeIfNeeded()
+        }
+        view.removeFromSuperview()
+        view.frame = CGRect(x: 0, y: 0, width: width, height: preferredHeight(width))
+        view.layoutSubtreeIfNeeded()
+    }
+
+    if let drags = testCase.drags, !drags.isEmpty {
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = view
+        let height = view.frame.height
+        for drag in drags {
+            let from = CGPoint(x: drag[0], y: height - drag[1])
+            let to = CGPoint(x: drag[2], y: height - drag[3])
+            let clickCount = drag.count > 4 ? Int(drag[4]) : 1
+            guard let target = window.contentView?.hitTest(from) else { continue }
+            func event(_ type: NSEvent.EventType, _ location: CGPoint) -> NSEvent {
+                NSEvent.mouseEvent(
+                    with: type, location: location, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clickCount, pressure: 1
+                )!
+            }
+            target.mouseDown(with: event(.leftMouseDown, from))
+            if from != to { target.mouseDragged(with: event(.leftMouseDragged, to)) }
+            target.mouseUp(with: event(.leftMouseUp, to))
+        }
+        if let document = view as? DiffsDocumentView {
+            print("selection: \((document.selectedText ?? "<none>").debugDescription)")
         }
         view.removeFromSuperview()
         view.frame = CGRect(x: 0, y: 0, width: width, height: preferredHeight(width))

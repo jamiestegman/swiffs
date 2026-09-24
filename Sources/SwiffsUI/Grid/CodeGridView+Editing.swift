@@ -32,6 +32,10 @@ protocol GridEditorClient: AnyObject {
     var editorRemoteCarets: [(position: Position, color: CGColor)] { get }
     var editorSelectionColor: CGColor? { get }
     var editorCaretColor: CGColor? { get }
+    /// Theme colors for search matches (`editor.findMatchHighlightBackground`)
+    /// and bracket matches (`editorBracketMatch.background`).
+    var editorSearchMatchColor: CGColor? { get }
+    var editorBracketMatchColor: CGColor? { get }
     var editorMarkedText: (text: String, range: DocumentRange)? { get }
 
     func editorKeyDown(_ event: NSEvent) -> Bool
@@ -198,12 +202,12 @@ extension CodeGridView {
                 context.setLineWidth(1)
                 for rect in rects { drawSquiggle(in: context, rect: rect) }
             case .bracketMatch:
-                context.setFillColor(style.cgColor(style.palette.fg.withAlpha(0.12)))
+                context.setFillColor(client.editorBracketMatchColor ?? style.cgColor(style.palette.fg.withAlpha(0.12)))
                 context.fill(rects)
                 context.setStrokeColor(style.cgColor(style.palette.fg.withAlpha(0.35)))
                 for rect in rects { context.stroke(rect.insetBy(dx: 0.5, dy: 0.5)) }
             case .searchMatch:
-                context.setFillColor(NSColor.findHighlightColor.withAlphaComponent(0.35).cgColor)
+                context.setFillColor(client.editorSearchMatchColor ?? NSColor.findHighlightColor.withAlphaComponent(0.35).cgColor)
                 context.fill(rects)
             case .activeSearchMatch:
                 context.setFillColor(NSColor.findHighlightColor.cgColor)

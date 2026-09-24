@@ -41,6 +41,10 @@ protocol EditorHost: AnyObject {
     func editorDetach(finalText: String?)
     /// Annotations moved by an edit (typed as the host's annotations).
     func editorApplyAnnotations(_ annotations: [Any])
+    /// The view that hosts overlays such as the search panel, and the top
+    /// offset below its header.
+    var editorOverlayContainer: NSView { get }
+    var editorOverlayTop: CGFloat { get }
     /// Fold skipping for vertical moves; nil when every line renders.
     var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? { get }
     /// Rebuild rows after the document changed.
@@ -75,7 +79,6 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     private var lineStore: [LineSlot] = []
     private var bracketMatch: (open: DocumentRange, close: DocumentRange)?
     private var searchMatches: [(start: Int, end: Int)] = []
-    private var activeSearchMatch: Int?
     private var markedText: (text: String, range: DocumentRange)?
     private var dragAnchor: EditorSelection?
     private var reservedSelections: [EditorSelection]?
@@ -150,6 +153,8 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         lineStore = []
         bracketMatch = nil
         searchMatches = []
+        searchPanel?.removeFromSuperview()
+        searchPanel = nil
         markedText = nil
     }
 
@@ -275,7 +280,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
 
     /// Updates line slots, tokens, selections and the view after a change
     /// (`#applyChange`).
-    private func applyChange(_ change: TextDocumentChange, _ nextSelections: [EditorSelection]?, annotations: [Annotation]?) {
+    private func applyChange(_ change: TextDocumentChange, _ nextSelections: [EditorSelection]?, annotations: [Annotation]?, refreshSearch shouldRefreshSearch: Bool = true) {
         guard let document, let host else { return }
         // Splice line slots: each per-edit range replaces the old lines it
         // covered with fresh (pending) lines.
@@ -308,7 +313,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         host.editorDocumentChanged(change)
         let invalidateFrom = change.startLine
         host.editorGrid.invalidateLines(side: .additions, lineIndexes: invalidateFrom ..< max(invalidateFrom, document.lineCount))
-        refreshSearch()
+        if shouldRefreshSearch { refreshSearch() }
         updateBracketMatch()
         host.editorGrid.scrollEditorCaretToVisible()
         host.editorGrid.restartCaretBlink()
@@ -385,8 +390,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         guard let document else { return }
         switch command {
         case .openSearchPanel, .openSearchReplacePanel:
-            host?.editorGrid.window?.makeFirstResponder(host?.editorGrid)
-            openSearch?(command == .openSearchReplacePanel)
+            openSearchPanel(command == .openSearchReplacePanel ? .replace : .find)
         case .findNextMatch:
             if selections.contains(where: \.isCollapsed) {
                 updateSelections(selections.map { $0.isCollapsed ? expandCollapsedSelectionToWord(document, $0) : $0 })
@@ -399,6 +403,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         case .copyLineUp, .copyLineDown:
             copySelectedLines(command == .copyLineUp ? -1 : 1)
         case .simplifySelection:
+            searchPanel?.closePanel()
             guard let primary = selections.last else { break }
             if selections.count > 1 {
                 updateSelections([primary])
@@ -440,8 +445,6 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         }
     }
 
-    /// Opens the search panel (set by the view integration).
-    var openSearch: ((Bool) -> Void)?
 
     private func indent(_ command: EditorCommand) {
         guard let document else { return }
@@ -573,24 +576,93 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
 
     // MARK: - Search
 
-    func setSearch(_ params: SearchParams?, activeIndex: Int?) {
-        guard let document, let params else {
-            searchMatches = []
-            activeSearchMatch = nil
-            host?.editorGrid.needsDisplay = true
+    private var searchPanel: EditorSearchPanel?
+
+    /// Opens (or switches the mode of) the find panel (`#openSearchPanel`).
+    private func openSearchPanel(_ mode: EditorSearchPanel.Mode) {
+        guard let document, let host else { return }
+        if let searchPanel {
+            searchPanel.applyMode(mode)
+            searchPanel.focusSearchField()
             return
         }
-        searchMatches = document.search(params)
-        activeSearchMatch = activeIndex
-        host?.editorGrid.needsDisplay = true
+        var defaultQuery = ""
+        if var primary = selections.last {
+            if primary.isCollapsed {
+                primary = expandCollapsedSelectionToWord(document, primary)
+                updateSelections(Array(selections.dropLast()) + [primary])
+            }
+            let text = document.getText(primary.range)
+            if !text.isEmpty, !text.contains("\n") { defaultQuery = text }
+        }
+        let hooks = EditorSearchHooks(
+            search: { [weak self] params in self?.document?.search(params) ?? [] },
+            scrollToMatch: { [weak self] match, _ in self?.scrollToSearchMatch(match) },
+            applyReplace: { [weak self] edits in self?.applySearchReplace(edits) },
+            replacementText: { [weak self] params, start, end in
+                guard let document = self?.document else { return params.replaceText }
+                return buildSearchReplacementText(
+                    positionAt: { document.positionAt($0) },
+                    offsetAt: { document.offsetAt($0) },
+                    getLineText: { document.getLineText($0) },
+                    searchParams: params,
+                    matchStart: start,
+                    matchEnd: end
+                )
+            },
+            onUpdate: { [weak self] matches, sync in self?.searchPanelDidUpdate(matches, syncSelection: sync) },
+            onClose: { [weak self] in
+                guard let self else { return }
+                self.searchPanel = nil
+                self.searchMatches = []
+                self.host?.editorGrid.needsDisplay = true
+                self.host?.editorGrid.window?.makeFirstResponder(self.host?.editorGrid)
+            }
+        )
+        let panel = EditorSearchPanel(defaultQuery: defaultQuery, mode: mode, hooks: hooks)
+        let container = host.editorOverlayContainer
+        let width = min(EditorSearchPanel.width, container.bounds.width - 24)
+        panel.frame = CGRect(x: container.bounds.width - width - 12, y: host.editorOverlayTop + 6, width: width, height: panel.preferredHeight)
+        panel.autoresizingMask = [.minXMargin]
+        container.addSubview(panel)
+        searchPanel = panel
+        panel.focusSearchField()
     }
 
-    private var searchParams: SearchParams?
+    private func scrollToSearchMatch(_ match: (start: Int, end: Int)) {
+        guard let document else { return }
+        updateSelections([createSelectionFromAnchorAndFocusOffsets(document, match.start, match.end)])
+        host?.editorGrid.scrollEditorCaretToVisible()
+    }
+
+    private func applySearchReplace(_ edits: [ResolvedTextEdit]) {
+        guard let document, !edits.isEmpty else { return }
+        let textEdits = edits.map { TextEdit(range: DocumentRange(start: document.positionAt($0.start), end: document.positionAt($0.end)), newText: $0.text) }
+        guard let change = try? document.applyEdits(textEdits, selectionsBefore: selections) else { return }
+        applyChange(change, nil, annotations: applyChangeToLineAnnotations(change), refreshSearch: false)
+    }
+
+    /// Records matches and resolves the current one (`onUpdate`).
+    private func searchPanelDidUpdate(_ matches: [(start: Int, end: Int)], syncSelection: Bool) -> (start: Int, end: Int)? {
+        guard let document else { return nil }
+        searchMatches = matches
+        host?.editorGrid.needsDisplay = true
+        if matches.isEmpty { return nil }
+        let primary = selections.last
+        if !syncSelection {
+            guard let primary else { return nil }
+            let start = document.offsetAt(primary.start)
+            let end = document.offsetAt(primary.end)
+            return matches.first { $0.start == start && $0.end == end }
+        }
+        let offset = primary.map { document.offsetAt($0.start) } ?? 0
+        guard let next = matches.first(where: { $0.start >= offset }) else { return nil }
+        scrollToSearchMatch(next)
+        return next
+    }
 
     private func refreshSearch() {
-        if let searchParams, let document {
-            searchMatches = document.search(searchParams)
-        }
+        searchPanel?.updateMatches(syncSelection: false)
     }
 
     // MARK: - GridEditorClient
@@ -602,10 +674,10 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     var editorOverlays: [GridEditorOverlay] {
         var overlays: [GridEditorOverlay] = []
         if let document {
-            for (index, match) in searchMatches.enumerated() {
+            for match in searchMatches {
                 overlays.append(GridEditorOverlay(
                     range: DocumentRange(start: document.positionAt(match.start), end: document.positionAt(match.end)),
-                    kind: index == activeSearchMatch ? .activeSearchMatch : .searchMatch
+                    kind: .searchMatch
                 ))
             }
         }
@@ -625,6 +697,14 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         tokenizer?.themeColors?.selectionBackground.flatMap { RGBAColor(css: $0) }.map { host!.editorGrid.style.cgColor($0) }
     }
 
+    private func themeColor(_ value: String?) -> CGColor? {
+        guard let value, let color = RGBAColor(css: value), let host else { return nil }
+        return host.editorGrid.style.cgColor(color)
+    }
+
+    var editorSearchMatchColor: CGColor? { themeColor(tokenizer?.themeColors?.findMatchHighlightBackground) }
+    var editorBracketMatchColor: CGColor? { themeColor(tokenizer?.themeColors?.bracketMatchBackground) }
+
     var editorCaretColor: CGColor? {
         tokenizer?.themeColors?.cursorForeground.flatMap { RGBAColor(css: $0) }.map { host!.editorGrid.style.cgColor($0) }
     }
@@ -632,6 +712,10 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     func editorKeyDown(_ event: NSEvent) -> Bool {
         guard let document else { return false }
         let keyEvent = editorKeyEvent(from: event)
+        if let searchPanel, let direction = resolveFindAgainShortcut(keyEvent) {
+            searchPanel.navigate(previous: direction == .previous)
+            return true
+        }
         if let command = resolveEditorCommand(keyEvent, keymap: compiledKeymap) {
             runCommand(command)
             return true

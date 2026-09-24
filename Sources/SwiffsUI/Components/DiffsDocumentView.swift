@@ -187,6 +187,9 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
         }
     }
 
+    var editorOverlayContainer: NSView { self }
+    var editorOverlayTop: CGFloat { headerHeight }
+
     // MARK: Text selection
 
     /// The text currently selected in the code (nil when nothing is

@@ -149,6 +149,7 @@ func run() throws {
         window.contentView = documentView
         guard let grid = documentView.subviews.first(where: { $0 is NSTextInputClient }) else { fatalError("no grid") }
         window.makeFirstResponder(grid)
+        documentView.layoutSubtreeIfNeeded()
         for action in testCase.editActions ?? [] {
             switch action.type {
             case "text":

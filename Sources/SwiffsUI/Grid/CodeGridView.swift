@@ -682,6 +682,7 @@ final class CodeGridView: NSView {
             }
             if let first = columns.first {
                 let frames = separatorFrames(separator, row: row, column: first)
+                drawButtonBorders(frames.buttons, context: context)
                 drawButtons(frames.buttons, separator: separator, context: context)
                 drawSeparatorLabel(separator.label, x: frames.textX, top: top, height: height, clip: frames.content, context: context)
             }
@@ -703,19 +704,21 @@ final class CodeGridView: NSView {
                     fillRoundedRect(rect, radius: radius, left: false, right: true, context: context)
                 }
             }
-            if !frames.buttons.isEmpty {
-                // The expand buttons' 2px `border-right` in the page color.
-                context.setFillColor(style.cgColor(palette.bg))
-                if let firstButton = frames.buttons.first?.1 {
-                    context.fill(CGRect(x: firstButton.maxX, y: firstButton.minY, width: GridMetrics.gutterBorder, height: GridMetrics.separatorHeight))
-                }
-                if frames.buttons.count > 1 {
-                    let top = frames.buttons[0].1
-                    context.fill(CGRect(x: top.minX, y: top.maxY, width: top.width, height: 2))
-                }
-            }
+            drawButtonBorders(frames.buttons, context: context)
             drawButtons(frames.buttons, separator: separator, context: context)
             drawSeparatorLabel(separator.label, x: frames.textX, top: frames.content?.minY ?? top, height: GridMetrics.separatorHeight, clip: frames.content, context: context)
+        }
+    }
+
+    /// Expand buttons' `border-right: 2px` and, for stacked buttons, the
+    /// 1px `border-bottom`/`border-top` in the page color.
+    private func drawButtonBorders(_ buttons: [(ExpansionDirection, CGRect)], context: CGContext) {
+        guard let first = buttons.first?.1 else { return }
+        context.setFillColor(style.cgColor(style.palette.bg))
+        let height = buttons.count > 1 ? buttons[1].1.maxY - first.minY : first.height
+        context.fill(CGRect(x: first.maxX, y: first.minY, width: GridMetrics.gutterBorder, height: height))
+        if buttons.count > 1 {
+            context.fill(CGRect(x: first.minX, y: first.maxY, width: first.width, height: buttons[1].1.minY - first.maxY))
         }
     }
 

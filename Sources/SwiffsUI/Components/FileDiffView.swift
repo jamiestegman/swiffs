@@ -83,7 +83,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
     // MARK: - Rendering API
 
     /// Renders a diff (`render({ fileDiff })`).
-    public func render(fileDiff: FileDiffMetadata, lineAnnotations: [Annotation]? = nil) {
+    public func render(fileDiff: FileDiffMetadata, lineAnnotations: [Annotation]? = nil, expandedHunks initialExpandedHunks: [Int: HunkExpansionRegion]? = nil) {
         let changed = self.fileDiff != fileDiff
         self.fileDiff = fileDiff
         if let lineAnnotations { setAnnotations(lineAnnotations) }
@@ -91,6 +91,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             expandedHunks.removeAll()
             plainLineCache.removeAll()
         }
+        if let initialExpandedHunks { expandedHunks = initialExpandedHunks }
         codeOptions = options.code
         refreshStyleIfNeeded()
         updateHeader()
@@ -160,6 +161,15 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
 
     public func expandedRegion(for hunkIndex: Int) -> HunkExpansionRegion {
         expandedHunks[hunkIndex] ?? .default
+    }
+
+    /// The whole expansion map (to persist state across view reuse).
+    public var expandedHunksMap: [Int: HunkExpansionRegion] {
+        get { expandedHunks }
+        set {
+            expandedHunks = newValue
+            rebuildRows()
+        }
     }
 
     // MARK: - Updates

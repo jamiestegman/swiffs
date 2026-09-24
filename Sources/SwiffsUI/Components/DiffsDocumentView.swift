@@ -45,8 +45,9 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
         wantsLayer = true
         grid.delegate = self
         grid.lineProvider = self
-        addSubview(header)
         addSubview(grid)
+        // The header sits above the code so it can stick over it.
+        addSubview(header)
     }
 
     @available(*, unavailable)
@@ -124,10 +125,28 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
         NSSize(width: NSView.noIntrinsicMetric, height: preferredHeight(forWidth: bounds.width > 0 ? bounds.width : 800))
     }
 
+    /// Offsets the header within the view to emulate `position: sticky`
+    /// while the view scrolls under the top of a scroll container.
+    public var stickyHeaderOffset: CGFloat = 0 {
+        didSet {
+            if stickyHeaderOffset != oldValue {
+                needsLayout = true
+            }
+        }
+    }
+
+    /// Frame (in this view's coordinates) of a rendered line, or nil when
+    /// the line is not currently rendered (collapsed or out of range).
+    public func frameForLine(_ lineNumber: Int, side: AnnotationSide? = nil) -> CGRect? {
+        guard showsCode, let row = grid.row(forLineNumber: lineNumber, side: side), let frame = grid.rowFrame(row) else { return nil }
+        return frame.offsetBy(dx: 0, dy: grid.frame.minY)
+    }
+
     public override func layout() {
         super.layout()
         header.isHidden = !showsHeader
-        header.frame = CGRect(x: 0, y: 0, width: bounds.width, height: headerHeight)
+        let maxOffset = max(0, bounds.height - headerHeight)
+        header.frame = CGRect(x: 0, y: min(max(0, stickyHeaderOffset), maxOffset), width: bounds.width, height: headerHeight)
         grid.isHidden = !showsCode
         let gridHeight = showsCode ? grid.requiredHeight(forWidth: bounds.width) : 0
         grid.frame = CGRect(x: 0, y: headerHeight, width: bounds.width, height: gridHeight)

@@ -53,6 +53,13 @@ let package = Package(
             name: "swiffs-snapshot",
             dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsUI"]
         ),
+        // Demo app: `swift run SwiffsDemo`.
+        .executableTarget(
+            name: "SwiffsDemo",
+            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsUI"],
+            path: "Examples/SwiffsDemo",
+            resources: [.copy("Resources")]
+        ),
         .testTarget(name: "SwiffsHighlightTests", dependencies: ["SwiffsHighlight"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsCoreTests", dependencies: ["SwiffsCore"], exclude: ["Fixtures"]),
     ]

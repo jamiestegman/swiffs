@@ -61,6 +61,14 @@ public final class FileStreamView: DiffsDocumentView {
         applyCodeOptions()
     }
 
+    /// Switches between light, dark and system themes (`setThemeType`).
+    public func setThemeType(_ themeType: ThemeType) {
+        guard options.code.themeType != themeType else { return }
+        var next = options
+        next.code.themeType = themeType
+        setOptions(next)
+    }
+
     public func setOptions(_ options: FileStreamOptions) {
         let restream = options.lang != self.options.lang || options.code.theme != self.options.code.theme
         self.options = options

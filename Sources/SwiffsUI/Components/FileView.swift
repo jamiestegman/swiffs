@@ -182,13 +182,28 @@ public final class FileView<Metadata>: DiffsDocumentView {
         onPostRender?(self)
     }
 
+    /// Re-renders the current input and re-highlights it (`rerender`).
+    public func rerender() {
+        guard file != nil else { return }
+        plainLineCache.removeAll()
+        rebuildRows()
+        grid.invalidateLines()
+        requestHighlight(force: true)
+    }
+
+    /// Switches between light, dark and system themes (`setThemeType`).
+    public func setThemeType(_ themeType: ThemeType) {
+        guard options.themeType != themeType else { return }
+        options.themeType = themeType
+    }
+
     // MARK: - Highlighting
 
-    private func requestHighlight() {
+    private func requestHighlight(force: Bool = false) {
         guard let file else { return }
         let renderOptions = RenderFileOptions(theme: options.theme, tokenizeMaxLineLength: options.tokenizeMaxLineLength)
         let key = HighlightKey(file: file, options: renderOptions, forcePlainText: lines.count > options.tokenizeMaxLength)
-        if key == highlightKey || key == pendingHighlightKey { return }
+        if !force, key == highlightKey || key == pendingHighlightKey { return }
         pendingHighlightKey = key
         if lines.count <= synchronousHighlightLineLimit, !key.forcePlainText,
            let result = try? MainThreadHighlighter.shared.renderFile(file, options: renderOptions)

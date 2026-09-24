@@ -203,6 +203,64 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
     /// Called after `loadDiffFiles` hydrated the diff.
     public var onDiffHydrated: ((FileDiffMetadata) -> Void)?
 
+    private var renderableExpandedHunks: ExpandedHunks {
+        options.expandUnchanged ? .all : .regions(expandedHunks)
+    }
+
+    /// Whether a one-based new-file line has a rendered row under the current
+    /// expansion state (`isLineRenderable`).
+    public func isLineRenderable(_ lineNumber: Int) -> Bool {
+        guard let fileDiff else { return true }
+        return (try? isAdditionLineRenderable(fileDiff: fileDiff, lineNumber: lineNumber, expandedHunks: renderableExpandedHunks, collapsedContextThreshold: options.collapsedContextThreshold)) ?? true
+    }
+
+    /// The nearest renderable one-based new-file line at or beyond
+    /// `lineNumber` (`getNearestRenderableLine`).
+    public func getNearestRenderableLine(_ lineNumber: Int, direction: VerticalDirection) -> Int? {
+        guard let fileDiff else { return lineNumber }
+        return (try? getNearestRenderableAdditionLine(fileDiff: fileDiff, lineNumber: lineNumber, direction: direction, expandedHunks: renderableExpandedHunks, collapsedContextThreshold: options.collapsedContextThreshold)) ?? lineNumber
+    }
+
+    /// Expands collapsed context so a one-based new-file line renders: one
+    /// expansion from the nearest gap edge, reaching the line plus the normal
+    /// expansion step (`revealLine`). Returns false when nothing expanded.
+    @discardableResult
+    public func revealLine(_ lineNumber: Int) -> Bool {
+        guard let fileDiff, !fileDiff.isPartial, !options.expandUnchanged else { return false }
+        let threshold = options.collapsedContextThreshold
+        let step = options.expansionLineCount
+        let expanded = ExpandedHunks.regions(expandedHunks)
+        for (hunkIndex, hunk) in fileDiff.hunks.enumerated() {
+            let (hunkStart, hunkEnd) = getHunkAdditionLineRange(hunk)
+            if lineNumber < hunkStart {
+                let region = getExpandedRegion(isPartial: fileDiff.isPartial, rangeSize: hunk.collapsedBefore, expandedHunks: expanded, hunkIndex: hunkIndex, collapsedContextThreshold: threshold)
+                let gapStart = hunkStart - region.rangeSize
+                if region.renderAll || lineNumber < gapStart + region.fromStart || lineNumber >= hunkStart - region.fromEnd {
+                    return false
+                }
+                let fromStartDistance = lineNumber - (gapStart + region.fromStart) + 1
+                let fromEndDistance = hunkStart - region.fromEnd - lineNumber
+                if fromStartDistance <= fromEndDistance {
+                    expandHunk(hunkIndex, direction: .up, lineCount: fromStartDistance + step)
+                } else {
+                    expandHunk(hunkIndex, direction: .down, lineCount: fromEndDistance + step)
+                }
+                return true
+            }
+            if lineNumber < hunkEnd { return false }
+        }
+        guard let lastHunk = fileDiff.hunks.last,
+              let trailing = try? getTrailingExpandedRegion(fileDiff: fileDiff, hunkIndex: fileDiff.hunks.count - 1, expandedHunks: expanded, collapsedContextThreshold: threshold, errorPrefix: "FileDiff.revealLine"),
+              !trailing.renderAll
+        else { return false }
+        let trailingStart = getHunkAdditionLineRange(lastHunk).end
+        if lineNumber < trailingStart + trailing.fromStart || lineNumber >= trailingStart + trailing.rangeSize {
+            return false
+        }
+        expandHunk(fileDiff.hunks.count, direction: .up, lineCount: lineNumber - (trailingStart + trailing.fromStart) + 1 + step)
+        return true
+    }
+
     public func expandedRegion(for hunkIndex: Int) -> HunkExpansionRegion {
         expandedHunks[hunkIndex] ?? .default
     }
@@ -368,6 +426,21 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         onMergeConflictActionClick?(conflictIndex, resolution)
     }
 
+    /// Re-renders the current input and re-highlights it (`rerender`).
+    public func rerender() {
+        guard fileDiff != nil else { return }
+        plainLineCache.removeAll()
+        rebuildRows()
+        grid.invalidateLines()
+        requestHighlight(force: true)
+    }
+
+    /// Switches between light, dark and system themes (`setThemeType`).
+    public func setThemeType(_ themeType: ThemeType) {
+        guard options.code.themeType != themeType else { return }
+        options.code.themeType = themeType
+    }
+
     // MARK: - Highlighting
 
     private var isMassive: Bool {
@@ -375,12 +448,12 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         return max(fileDiff.additionLines.count, fileDiff.deletionLines.count) > options.code.tokenizeMaxLength
     }
 
-    private func requestHighlight() {
+    private func requestHighlight(force: Bool = false) {
         guard let fileDiff else { return }
         let hasContent = !fileDiff.additionLines.isEmpty || !fileDiff.deletionLines.isEmpty
         guard hasContent else { return }
         let key = HighlightKey(diff: fileDiff, options: effectiveOptions.renderDiffOptions, forcePlainText: isMassive)
-        if key == highlightKey || key == pendingHighlightKey { return }
+        if !force, key == highlightKey || key == pendingHighlightKey { return }
         pendingHighlightKey = key
         let lineCount = max(fileDiff.additionLines.count, fileDiff.deletionLines.count)
         if lineCount <= synchronousHighlightLineLimit, !key.forcePlainText {
@@ -576,31 +649,13 @@ extension FileDiffView: EditorHost {
     /// Expands the collapsed gap that hides an addition line
     /// (`#revealLineIfCollapsed`).
     func editorRevealLine(_ line: Int) {
-        guard grid.editorLocation(ofLine: line) == nil, let diff = fileDiff else { return }
-        var previousEnd = 0
-        for (index, hunk) in diff.hunks.enumerated() {
-            let start = getHunkSideStartBoundary(hunk.additionStart, hunk.additionCount)
-            if line >= previousEnd, line < start {
-                expandHunk(index, direction: .both, lineCount: Int.max)
-                return
-            }
-            previousEnd = getHunkSideEndBoundary(hunk.additionStart, hunk.additionCount)
-        }
-        if line >= previousEnd {
-            expandHunk(diff.hunks.count, direction: .both, lineCount: Int.max)
-        }
+        if !isLineRenderable(line + 1) { revealLine(line + 1) }
     }
 
     var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? {
         { [weak self] line, direction in
             guard let self else { return line }
-            let count = self.editorSource?.lineCount ?? 0
-            var candidate = line
-            while candidate >= 0, candidate < count {
-                if self.grid.editorLocation(ofLine: candidate) != nil { return candidate }
-                candidate += direction == .up ? -1 : 1
-            }
-            return nil
+            return self.getNearestRenderableLine(line + 1, direction: direction == .up ? .up : .down).map { $0 - 1 }
         }
     }
 

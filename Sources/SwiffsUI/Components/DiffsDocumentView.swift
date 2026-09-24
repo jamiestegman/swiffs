@@ -120,6 +120,13 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
     var showsHeader: Bool { !codeOptions.disableFileHeader }
     var showsCode: Bool { !codeOptions.collapsed }
 
+    /// Horizontal scroll position of the code columns
+    /// (`getCodeScrollLeft`).
+    public func getCodeScrollLeft() -> CGFloat { grid.scrollX }
+
+    /// Scrolls the code columns horizontally (`setCodeScrollLeft`).
+    public func setCodeScrollLeft(_ position: CGFloat) { grid.setScrollX(position) }
+
     // MARK: Render errors
 
     /// Receives render and file-loading errors (upstream logs them with

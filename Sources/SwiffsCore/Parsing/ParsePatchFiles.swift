@@ -20,13 +20,13 @@ public enum SwiffsDiagnostics {
 
 // Keep quotes and transport prefixes until decoding, while allowing spaces in
 // unquoted paths and escaped quotes inside quoted paths.
-nonisolated(unsafe) private let gitDiffHeaderFilenames = try! NSRegularExpression(
+private let gitDiffHeaderFilenames = try! NSRegularExpression(
     pattern: #"^diff --git ("a/(?:[^"\\]|\\.)*"|a/.+?) ("b/(?:[^"\\]|\\.)*"|b/.+?)$"#
 )
-nonisolated(unsafe) private let filenameHeaderRegex = try! NSRegularExpression(
+private let filenameHeaderRegex = try! NSRegularExpression(
     pattern: #"^(---|\+\+\+)\s+([^\t\r\n]+)"#
 )
-nonisolated(unsafe) private let indexLineMetadata = try! NSRegularExpression(
+private let indexLineMetadata = try! NSRegularExpression(
     pattern: #"^index ([0-9a-f]+)\.\.([0-9a-f]+)(?: (\d+))?$"#,
     options: [.caseInsensitive]
 )

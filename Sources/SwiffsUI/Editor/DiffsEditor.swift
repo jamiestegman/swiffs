@@ -413,6 +413,34 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     }
 
     func highlightedLine(_ index: Int) -> HighlightedLine {
+        let line = storedHighlightedLine(index)
+        guard let markedText, markedText.range.start.line == index else { return line }
+        return splicing(markedText.text, into: line, at: markedText.range.start.character)
+    }
+
+    /// Shows IME composition text inline (display only; the document changes
+    /// when the composition commits).
+    private func splicing(_ text: String, into line: HighlightedLine, at character: Int) -> HighlightedLine {
+        var units = Array(line.text.utf16)
+        let offset = min(max(0, character), units.count)
+        let inserted = Array(text.utf16)
+        units.insert(contentsOf: inserted, at: offset)
+        let shift = inserted.count
+        var tokens: [HighlightedToken] = []
+        for token in line.tokens {
+            if token.end <= offset {
+                tokens.append(token)
+            } else if token.start >= offset {
+                tokens.append(HighlightedToken(start: token.start + shift, end: token.end + shift, styles: token.styles))
+            } else {
+                tokens.append(HighlightedToken(start: token.start, end: offset, styles: token.styles))
+                tokens.append(HighlightedToken(start: offset + shift, end: token.end + shift, styles: token.styles))
+            }
+        }
+        return HighlightedLine(text: String(decoding: units, as: UTF16.self), tokens: tokens)
+    }
+
+    private func storedHighlightedLine(_ index: Int) -> HighlightedLine {
         guard index >= 0, index < lineStore.count else { return HighlightedLine(text: "", tokens: []) }
         switch lineStore[index] {
         case .original(let original):
@@ -1204,7 +1232,10 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
 
     func editorInsertText(_ text: String) {
         guard let document else { return }
-        markedText = nil
+        if let marked = markedText {
+            markedText = nil
+            invalidateMarkedLines(marked.range.start.line)
+        }
         let normalized = text.utf16.count == 1 ? text : text
         if let surround = getAutoSurroundReplacementTexts(document, selections, normalized, autoSurround: options.autoSurround) {
             replaceSelectionText(.perSelection(surround))
@@ -1217,17 +1248,24 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         // Composition renders underlined at the caret without editing the
         // document until committed.
         guard let primary = selections.last else { return }
+        let previousLine = markedText?.range.start.line
         if text.isEmpty {
             markedText = nil
         } else {
             let start = primary.start
             markedText = (text, DocumentRange(start: start, end: Position(line: start.line, character: start.character + text.utf16.count)))
         }
-        host?.editorGrid.needsDisplay = true
+        invalidateMarkedLines(previousLine, markedText?.range.start.line)
     }
 
     func editorUnmarkText() {
+        let previousLine = markedText?.range.start.line
         markedText = nil
+        invalidateMarkedLines(previousLine, nil)
+    }
+
+    private func invalidateMarkedLines(_ lines: Int?...) {
+        host?.editorGrid.invalidateLines(side: .additions, lineIndexes: lines.compactMap { $0 })
         host?.editorGrid.needsDisplay = true
     }
 

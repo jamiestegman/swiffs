@@ -127,4 +127,18 @@ struct EditorIntegrationTests {
         #expect(event.fileDiff.hunks == expected.hunks)
         #expect(view.fileDiff?.additionLines == expected.additionLines)
     }
+
+    @Test func compositionShowsInlineAndCommits() throws {
+        let (view, editor, _) = makeFileEditor("ab\n")
+        editor.setSelections([EditorSelection(caret: Position(line: 0, character: 1))])
+        view.grid.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.grid.hasMarkedText())
+        // Display only: the document is unchanged while composing.
+        #expect(editor.getText() == "ab\n")
+        #expect(view.line(side: .additions, lineIndex: 0).text == "aにほb")
+        view.grid.insertText("日本", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!view.grid.hasMarkedText())
+        #expect(editor.getText() == "a日本b\n")
+        #expect(view.line(side: .additions, lineIndex: 0).text == "a日本b")
+    }
 }

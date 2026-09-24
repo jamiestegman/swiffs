@@ -545,6 +545,11 @@ final class CodeGridView: NSView {
             var numberState = lineState(for: line, lineType: visualType, row: row, column: columnIndex, numberCell: true)
             contentState.mergeConflict = tint
             numberState.mergeConflict = tint
+            if isEditing {
+                let active = editorActiveLineMix(for: line)
+                contentState.activeLineSourceMix = active.content
+                numberState.activeLineSourceMix = active.number
+            }
             fill(contentRect, palette.background(for: .line, state: contentState), context)
             let selectionRects = textSelectionRects(row: row, column: columnIndex, top: top)
             if !selectionRects.isEmpty {
@@ -554,7 +559,10 @@ final class CodeGridView: NSView {
                 context.fill(selectionRects)
                 context.restoreGState()
             }
-            if isEditing { drawEditorBackground(line: line, row: row, column: columnIndex, contentRect: contentRect, context: context) }
+            if isEditing {
+                drawEditorActiveLineBorder(line: line, contentRect: contentRect, context: context)
+                drawEditorBackground(line: line, row: row, column: columnIndex, contentRect: contentRect, context: context)
+            }
             drawLineText(line, column: column, top: top, contentRect: contentRect, context: context)
             if isEditing { drawEditorForeground(line: line, row: row, column: columnIndex, contentRect: contentRect, context: context) }
             fill(gutterRect, palette.background(for: .lineNumber, state: numberState), context)

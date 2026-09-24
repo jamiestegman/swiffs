@@ -183,6 +183,9 @@ public struct LineVisualState: Hashable, Sendable {
     public var hovered: Bool
     /// Rendered inside a file with merge conflicts (`data-has-merge-conflict`).
     public var hasMergeConflict: Bool
+    /// The editor's active line (`data-editor-active-line`) with the theme's
+    /// `--diffs-editor-active-line-source-mix` percentage.
+    public var activeLineSourceMix: Double?
 
     public init(
         lineType: LineType? = nil,
@@ -190,7 +193,8 @@ public struct LineVisualState: Hashable, Sendable {
         backgroundEnabled: Bool = true,
         selected: Bool = false,
         hovered: Bool = false,
-        hasMergeConflict: Bool = false
+        hasMergeConflict: Bool = false,
+        activeLineSourceMix: Double? = nil
     ) {
         self.lineType = lineType
         self.mergeConflict = mergeConflict
@@ -198,6 +202,7 @@ public struct LineVisualState: Hashable, Sendable {
         self.selected = selected
         self.hovered = hovered
         self.hasMergeConflict = hasMergeConflict
+        self.activeLineSourceMix = activeLineSourceMix
     }
 }
 
@@ -296,18 +301,24 @@ extension DiffsPalette {
         }
         _ = diffLineMixTarget
 
+        // --diffs-computed-editor-active-line-bg
+        var activeBg = selectedBg
+        if let sourceMix = state.activeLineSourceMix {
+            activeBg = selectedBg.mix(selectionTarget, sourceMix)
+        }
+
         // --diffs-computed-hovered-line-bg
-        var result = selectedBg
+        var result = activeBg
         if state.hovered {
-            let target = hoverIsActiveBg ? selectedBg : hoverTarget
-            result = selectedBg.mix(target, pick(97, 91))
+            let target = hoverIsActiveBg ? activeBg : hoverTarget
+            result = activeBg.mix(target, pick(97, 91))
         }
         return result
     }
 
     /// Foreground color of line numbers.
     public func lineNumberColor(state: LineVisualState) -> RGBAColor {
-        if state.selected { return selectionNumberFg }
+        if state.selected || state.activeLineSourceMix != nil { return selectionNumberFg }
         if state.backgroundEnabled {
             if let tint = state.mergeConflict {
                 switch tint {

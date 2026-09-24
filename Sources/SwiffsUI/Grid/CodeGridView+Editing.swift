@@ -35,6 +35,13 @@ protocol GridEditorClient: AnyObject {
     /// Theme colors for search matches (`editor.findMatchHighlightBackground`)
     /// and bracket matches (`editorBracketMatch.background`).
     var editorSearchMatchColor: CGColor? { get }
+    /// The caret line (`setEditorActiveLine`); `numberOnly` while a text
+    /// selection exists.
+    var editorActiveLine: (line: Int, numberOnly: Bool)? { get }
+    /// `--diffs-editor-active-line-source-mix` in percent.
+    var editorActiveLineSourceMix: Double { get }
+    /// `--diffs-editor-line-highlight-border`; nil draws no border.
+    var editorLineHighlightBorder: CGColor? { get }
     /// Inline ghost text (edit prediction) drawn after a position.
     var editorGhostText: [(position: Position, text: String)] { get }
     var editorBracketMatchColor: CGColor? { get }
@@ -191,6 +198,26 @@ extension CodeGridView {
             rects.append(CGRect(x: originX + x0, y: top + CGFloat(index) * lineHeight, width: max(0, x1 - x0), height: lineHeight))
         }
         return rects
+    }
+
+    /// Active line state for a rendered line: the source mix for the content
+    /// and number cells (nil when inactive).
+    func editorActiveLineMix(for line: RenderedLine) -> (content: Double?, number: Double?) {
+        guard let client = editing.client, editing.isFocused, line.side == client.editorSide, line.lineType != .changeDeletion,
+              let active = client.editorActiveLine, active.line == line.lineIndex
+        else { return (nil, nil) }
+        let mix = client.editorActiveLineSourceMix
+        return (active.numberOnly ? nil : mix, mix)
+    }
+
+    /// The active line's inset border (`box-shadow: inset 0 0 0 1px`).
+    func drawEditorActiveLineBorder(line: RenderedLine, contentRect: CGRect, context: CGContext) {
+        guard let client = editing.client, editorActiveLineMix(for: line).content != nil, let border = client.editorLineHighlightBorder else { return }
+        context.saveGState()
+        context.setStrokeColor(border)
+        context.setLineWidth(1)
+        context.stroke(contentRect.insetBy(dx: 0.5, dy: 0.5))
+        context.restoreGState()
     }
 
     /// Draws editor selections and overlays behind a line's text.

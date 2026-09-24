@@ -1103,6 +1103,21 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         return host.editorGrid.style.cgColor(color)
     }
 
+    var editorActiveLine: (line: Int, numberOnly: Bool)? {
+        guard let primary = selections.last else { return nil }
+        return (primary.focus.line, selections.contains { !$0.isCollapsed })
+    }
+
+    var editorActiveLineSourceMix: Double { tokenizer?.themeColors?.activeLineSourceMix ?? 100 }
+
+    var editorLineHighlightBorder: CGColor? {
+        guard let colors = tokenizer?.themeColors, colors.hasLineHighlightBorder, let host else { return nil }
+        if let border = colors.lineHighlightBorder { return themeColor(border) }
+        // `color-mix(in lab, var(--diffs-bg) 70%, var(--diffs-fg))`
+        let palette = host.editorGrid.style.palette
+        return host.editorGrid.style.cgColor(palette.bg.mix(palette.fg, 70))
+    }
+
     var editorSearchMatchColor: CGColor? { themeColor(tokenizer?.themeColors?.findMatchHighlightBackground) }
     var editorBracketMatchColor: CGColor? { themeColor(tokenizer?.themeColors?.bracketMatchBackground) }
 

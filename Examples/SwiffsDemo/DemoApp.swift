@@ -13,6 +13,7 @@ enum Example: String, CaseIterable, Identifiable {
     case file = "File"
     case markdown = "Markdown file"
     case ansi = "ANSI"
+    case conflict = "Merge conflict"
 
     var id: String { rawValue }
 }
@@ -49,6 +50,7 @@ struct DemoView: View {
     @State private var lineDiffType: LineDiffType = .wordAlt
     @State private var hover = true
     @State private var selection: CodeViewLineSelection?
+    @State private var conflictResetID = 0
 
     private static let fileDiff: FileDiffMetadata = {
         (try? parseDiffFromFile(
@@ -124,6 +126,17 @@ struct DemoView: View {
             DiffsCodeList(items: [CodeViewItem<String>.file(id: "md", FileContents(name: "example.md", contents: resource("example_md.txt")))], options: codeViewOptions)
         case .ansi:
             DiffsCodeList(items: [CodeViewItem<String>.file(id: "ansi", FileContents(name: "output.log", contents: resource("fileAnsi.txt"), lang: "ansi"))], options: codeViewOptions)
+        case .conflict:
+            ScrollView {
+                DiffsUnresolvedFile(
+                    file: FileContents(name: "fileConflict.ts", contents: resource("fileConflict.txt")),
+                    options: diffOptions
+                )
+                .id(conflictResetID)
+            }
+            .toolbar {
+                Button("Reset conflicts") { conflictResetID += 1 }
+            }
         }
     }
 

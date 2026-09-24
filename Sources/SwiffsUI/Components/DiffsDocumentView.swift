@@ -188,6 +188,8 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
     func grid(_ grid: CodeGridView, tokenEvent: DiffsTokenEvent, kind: GridTokenEventKind) {}
     func grid(_ grid: CodeGridView, selectionEvent range: SelectedLineRange?, phase: GridSelectionPhase) {}
     func grid(_ grid: CodeGridView, gutterUtilityClicked range: SelectedLineRange) {}
+    func grid(_ grid: CodeGridView, mergeConflictActionViewFor conflictIndex: Int) -> NSView? { nil }
+    func grid(_ grid: CodeGridView, mergeConflictAction resolution: MergeConflictResolution, conflictIndex: Int) {}
 
     func gridDidChangeHeight(_ grid: CodeGridView) {
         gridContentChanged()

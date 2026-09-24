@@ -128,6 +128,49 @@ public struct DiffsFile<Metadata>: NSViewRepresentable {
     }
 }
 
+/// Renders a file with merge conflict markers (`<UnresolvedFile />`).
+/// Uncontrolled: the file is parsed once and conflicts resolve internally,
+/// reporting the updated text through `onResolve`.
+public struct DiffsUnresolvedFile: NSViewRepresentable {
+    public var file: FileContents
+    public var options: DiffsDiffOptions
+    public var maxContextLines: Int
+    public var onResolve: ((FileContents, MergeConflictActionPayload) -> Void)?
+
+    public init(
+        file: FileContents,
+        options: DiffsDiffOptions = DiffsDiffOptions(),
+        maxContextLines: Int = 6,
+        onResolve: ((FileContents, MergeConflictActionPayload) -> Void)? = nil
+    ) {
+        self.file = file
+        self.options = options
+        self.maxContextLines = maxContextLines
+        self.onResolve = onResolve
+    }
+
+    public func makeNSView(context: Context) -> UnresolvedFileView<Void> {
+        let view = UnresolvedFileView<Void>(options: options)
+        view.maxContextLines = maxContextLines
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return view
+    }
+
+    public func updateNSView(_ view: UnresolvedFileView<Void>, context: Context) {
+        view.onMergeConflictResolve = onResolve
+        view.options = options
+        // Only the first file is parsed; later text comes from resolutions.
+        if view.fileDiff == nil {
+            try? view.render(file: file)
+        }
+    }
+
+    public func sizeThatFits(_ proposal: ProposedViewSize, nsView: UnresolvedFileView<Void>, context: Context) -> CGSize? {
+        let width = proposal.width ?? 800
+        return CGSize(width: width, height: nsView.preferredHeight(forWidth: width))
+    }
+}
+
 /// A virtualized list of files and diffs (`<CodeView />`).
 public struct DiffsCodeList<Metadata>: NSViewRepresentable {
     public var items: [CodeViewItem<Metadata>]

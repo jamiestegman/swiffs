@@ -17,6 +17,10 @@ protocol CodeGridDelegate: AnyObject {
     func grid(_ grid: CodeGridView, tokenEvent: DiffsTokenEvent, kind: GridTokenEventKind)
     func grid(_ grid: CodeGridView, selectionEvent range: SelectedLineRange?, phase: GridSelectionPhase)
     func grid(_ grid: CodeGridView, gutterUtilityClicked range: SelectedLineRange)
+    /// Custom view for a merge conflict action row
+    /// (`mergeConflictActionsType` as a render function).
+    func grid(_ grid: CodeGridView, mergeConflictActionViewFor conflictIndex: Int) -> NSView?
+    func grid(_ grid: CodeGridView, mergeConflictAction resolution: MergeConflictResolution, conflictIndex: Int)
     func gridDidChangeHeight(_ grid: CodeGridView)
     /// Whether the owner handles line/number clicks (makes rows interactive).
     var gridHandlesLineClicks: Bool { get }
@@ -44,6 +48,7 @@ enum GridHit: Equatable {
     case expand(hunkIndex: Int, direction: ExpansionDirection, all: Bool)
     case utility(row: Int, column: Int)
     case annotation(row: Int, column: Int)
+    case mergeAction(row: Int, conflictIndex: Int, resolution: MergeConflictResolution)
     case none
 }
 
@@ -77,6 +82,7 @@ final class CodeGridView: NSView {
     private var hoveredLineEvent: DiffsLineEvent?
     private var hoveredToken: DiffsTokenEvent?
     private var hoveredExpand: GridHit?
+    private var hoveredMergeAction: GridHit?
     private(set) var selectedRange: SelectedLineRange?
     private var proposedRange: SelectedLineRange??
     private var selectionAnchor: SelectionPoint?
@@ -204,8 +210,8 @@ final class CodeGridView: NSView {
                 case .separator(let separator):
                     cellHeight = separatorHeight(separator)
                 case .injected(let injected):
-                    if case .mergeConflictActions = injected.kind {
-                        cellHeight = GridMetrics.mergeConflictActionsHeight
+                    if case .mergeConflictActions(let conflictIndex) = injected.kind {
+                        cellHeight = measureMergeActions(conflictIndex: conflictIndex, row: rowIndex, column: columnIndex, geometry: column)
                     } else {
                         cellHeight = lineHeight
                     }
@@ -305,6 +311,31 @@ final class CodeGridView: NSView {
         return height
     }
 
+    /// `[data-merge-conflict-actions-content]` has `min-height: 1.75rem`;
+    /// custom action views may grow it.
+    private func measureMergeActions(conflictIndex: Int, row: Int, column: Int, geometry: ColumnGeometry) -> CGFloat {
+        let minimum = GridMetrics.mergeConflictActionsHeight
+        guard model.mergeConflictActionsType == .custom else { return minimum }
+        let key = AnnotationViewKey(row: row, column: column)
+        var view = annotationViews[key]
+        if view == nil, let created = delegate?.grid(self, mergeConflictActionViewFor: conflictIndex) {
+            annotationViews[key] = created
+            addSubview(created)
+            view = created
+        }
+        guard let view else { return minimum }
+        let width = geometry.contentWidth
+        if let measured = annotationHeights[key], abs(view.frame.width - width) < 0.5 {
+            return max(minimum, measured)
+        }
+        view.frame.size.width = width
+        view.layoutSubtreeIfNeeded()
+        let fitting = view.fittingSize.height
+        let height = max(0, fitting > 0 ? fitting : view.intrinsicContentSize.height)
+        annotationHeights[key] = height
+        return max(minimum, height)
+    }
+
     private func layoutAnnotationViews() {
         for (key, view) in annotationViews {
             guard key.row < rowTops.count, key.column < columns.count else {
@@ -374,6 +405,15 @@ final class CodeGridView: NSView {
             return .line(row: row, column: columnIndex, line: line, numberColumn: point.x < column.contentMinX)
         case .annotation:
             return .annotation(row: row, column: columnIndex)
+        case .injected(let injected):
+            guard case .mergeConflictActions(let conflictIndex) = injected.kind, model.mergeConflictActionsType == .default else {
+                return .none
+            }
+            let contentRect = CGRect(x: column.contentMinX, y: rowTops[row], width: column.contentWidth, height: rowHeights[row])
+            for frame in mergeActionFrames(contentRect: contentRect) where frame.1.contains(point) {
+                return .mergeAction(row: row, conflictIndex: conflictIndex, resolution: frame.0)
+            }
+            return .none
         default:
             return .none
         }
@@ -469,12 +509,22 @@ final class CodeGridView: NSView {
         let contentRect = CGRect(x: column.contentMinX, y: top, width: column.contentWidth, height: height)
         switch cell {
         case .line(let line):
-            let contentState = lineState(for: line, lineType: line.lineType, row: row, column: columnIndex, numberCell: false)
-            let numberState = lineState(for: line, lineType: line.lineType, row: row, column: columnIndex, numberCell: true)
+            // Unresolved files render change lines as context tinted by
+            // conflict side (`getUnifiedLineDecoration`).
+            var visualType = line.lineType
+            var tint: MergeConflictLineTint?
+            if model.hasMergeConflict, line.lineType == .changeDeletion || line.lineType == .changeAddition {
+                tint = line.lineType == .changeDeletion ? .current : .incoming
+                visualType = .context
+            }
+            var contentState = lineState(for: line, lineType: visualType, row: row, column: columnIndex, numberCell: false)
+            var numberState = lineState(for: line, lineType: visualType, row: row, column: columnIndex, numberCell: true)
+            contentState.mergeConflict = tint
+            numberState.mergeConflict = tint
             fill(contentRect, palette.background(for: .line, state: contentState), context)
             drawLineText(line, column: column, top: top, contentRect: contentRect, context: context)
             fill(gutterRect, palette.background(for: .lineNumber, state: numberState), context)
-            drawIndicator(for: line.lineType, gutterRect: gutterRect, contentRect: contentRect, context: context)
+            drawIndicator(for: visualType, gutterRect: gutterRect, contentRect: contentRect, context: context)
             if !options.disableLineNumbers {
                 drawLineNumber(line.lineNumber, color: palette.lineNumberColor(state: numberState), gutterRect: gutterRect, top: top, context: context)
             }
@@ -808,7 +858,9 @@ final class CodeGridView: NSView {
             let state = LineVisualState(backgroundEnabled: !options.disableBackground, hasMergeConflict: true)
             fill(contentRect, palette.background(for: .mergeConflictActions, state: state), context)
             fill(gutterRect, palette.background(for: .gutterBuffer(.mergeConflictAction), state: state), context)
-            drawMergeActions(injected, contentRect: contentRect, context: context)
+            if model.mergeConflictActionsType == .default {
+                drawMergeActions(injected, row: row, contentRect: contentRect, context: context)
+            }
         }
     }
 
@@ -829,13 +881,21 @@ final class CodeGridView: NSView {
         return frames
     }
 
-    private func drawMergeActions(_ injected: InjectedCell, contentRect: CGRect, context: CGContext) {
+    private func drawMergeActions(_ injected: InjectedCell, row: Int, contentRect: CGRect, context: CGContext) {
         let palette = style.palette
         let font = NSFont(descriptor: style.headerFont.fontDescriptor, size: 12) ?? style.headerFont
         let baseline = contentRect.minY + ((contentRect.height - (font.ascender - font.descender)) / 2 + font.ascender).rounded()
         let frames = mergeActionFrames(contentRect: contentRect)
         for (index, frame) in frames.enumerated() {
-            let line = makeTextLine(frame.2, font: font, color: style.cgColor(palette.fgNumber))
+            var color = palette.fgNumber
+            if case .mergeAction(let hoveredRow, _, let resolution)? = hoveredMergeAction, hoveredRow == row, resolution == frame.0 {
+                switch resolution {
+                case .current: color = palette.additionBase
+                case .incoming: color = palette.modifiedBase
+                case .both: color = palette.fg
+                }
+            }
+            let line = makeTextLine(frame.2, font: font, color: style.cgColor(color))
             drawTextLine(line, in: context, x: frame.1.minX, baseline: baseline)
             if index < frames.count - 1 {
                 let separator = makeTextLine("|", font: font, color: style.cgColor(palette.fgNumber.withAlpha(palette.fgNumber.a * 0.6)))
@@ -970,10 +1030,11 @@ final class CodeGridView: NSView {
             delegate?.grid(self, lineEvent: line, kind: .leave)
             hoveredLineEvent = nil
         }
-        if hoveredRow != nil || hoveredExpand != nil {
+        if hoveredRow != nil || hoveredExpand != nil || hoveredMergeAction != nil {
             hoveredRow = nil
             hoveredColumn = nil
             hoveredExpand = nil
+            hoveredMergeAction = nil
             needsDisplay = true
         }
         NSCursor.arrow.set()
@@ -994,6 +1055,7 @@ final class CodeGridView: NSView {
         var newColumn: Int?
         var numberColumn = false
         var newExpand: GridHit?
+        var newMergeAction: GridHit?
         switch hit {
         case .line(let row, let column, _, let isNumber):
             newRow = row
@@ -1005,6 +1067,8 @@ final class CodeGridView: NSView {
             numberColumn = true
         case .expand:
             newExpand = hit
+        case .mergeAction:
+            newMergeAction = hit
         default:
             break
         }
@@ -1028,11 +1092,12 @@ final class CodeGridView: NSView {
                 delegate?.grid(self, lineEvent: event, kind: .enter)
             }
         }
-        if !sameLine || numberColumn != hoveredNumberColumn || newExpand != hoveredExpand {
+        if !sameLine || numberColumn != hoveredNumberColumn || newExpand != hoveredExpand || newMergeAction != hoveredMergeAction {
             hoveredRow = newRow
             hoveredColumn = newColumn
             hoveredNumberColumn = numberColumn
             hoveredExpand = newExpand
+            hoveredMergeAction = newMergeAction
             needsDisplay = true
         }
         updateCursor(hit: hit)
@@ -1040,7 +1105,7 @@ final class CodeGridView: NSView {
 
     private func updateCursor(hit: GridHit) {
         switch hit {
-        case .expand, .utility:
+        case .expand, .utility, .mergeAction:
             NSCursor.pointingHand.set()
         case .line(_, _, _, let numberColumn):
             let interactiveNumbers = options.enableLineSelection || (delegate?.gridHandlesLineNumberClicks ?? false)
@@ -1214,6 +1279,8 @@ final class CodeGridView: NSView {
         case .expand(let hunkIndex, let direction, let all):
             let expandAll = all || event.modifierFlags.contains(.shift)
             delegate?.grid(self, expandHunk: hunkIndex, direction: expandAll ? .both : direction, all: expandAll)
+        case .mergeAction(_, let conflictIndex, let resolution):
+            delegate?.grid(self, mergeConflictAction: resolution, conflictIndex: conflictIndex)
         case .line(_, _, let line, let numberColumn):
             if let token = tokenEvent(at: point, hit: hit) {
                 delegate?.grid(self, tokenEvent: token, kind: .click)

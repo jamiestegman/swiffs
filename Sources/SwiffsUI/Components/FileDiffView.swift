@@ -180,7 +180,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         if !styleChanged {
             rebuildRows()
         }
-        if old.renderDiffOptions != options.renderDiffOptions || old.code.tokenizeMaxLength != options.code.tokenizeMaxLength {
+        if effectiveOptions(old).renderDiffOptions != effectiveOptions.renderDiffOptions || old.code.tokenizeMaxLength != options.code.tokenizeMaxLength {
             requestHighlight()
         }
     }
@@ -229,7 +229,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             gridContentChanged()
             return
         }
-        var rowOptions = options.rowsOptions
+        var rowOptions = effectiveOptions.rowsOptions
         rowOptions.canLoadDiffFiles = false
         do {
             rowsResult = try buildDiffRows(
@@ -237,7 +237,8 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
                 options: rowOptions,
                 expandedHunks: expandedHunks,
                 deletionAnnotationLines: Set(lineAnnotations.filter { $0.side == .deletions }.map(\.lineNumber)),
-                additionAnnotationLines: Set(lineAnnotations.filter { $0.side == .additions }.map(\.lineNumber))
+                additionAnnotationLines: Set(lineAnnotations.filter { $0.side == .additions }.map(\.lineNumber)),
+                injectedRows: mergeConflict?.injectedRows(for: fileDiff)
             )
         } catch {
             rowsResult = nil
@@ -256,9 +257,58 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             guard let diff = self?.fileDiff else { return nil }
             return getLineIndexForDiff(diff, lineNumber: lineNumber, side: side ?? .additions)
         }
-        grid.update(model: GridModel(diff: rowsResult, style: options.diffStyle), options: gridOptions, style: style)
+        var model = GridModel(diff: rowsResult, style: effectiveOptions.diffStyle)
+        if let mergeConflict {
+            model.hasMergeConflict = true
+            model.mergeConflictActionsType = mergeConflict.actionsType
+        }
+        grid.update(model: model, options: gridOptions, style: style)
         gridContentChanged()
         onPostRender?(self)
+    }
+
+    // MARK: - Merge conflicts
+
+    /// Merge conflict rendering state, set by `UnresolvedFileView`
+    /// (`UnresolvedFileHunksRenderer.setConflictState`).
+    struct MergeConflictState {
+        var actions: [MergeConflictDiffAction?]
+        var markerRows: [MergeConflictMarkerRow]
+        var actionsType: MergeConflictActionsType
+
+        func injectedRows(for fileDiff: FileDiffMetadata) -> MergeConflictInjectedRows {
+            MergeConflictInjectedRows(actions: actionsType == .none ? [] : actions, markerRows: markerRows, fileDiff: fileDiff)
+        }
+    }
+
+    var mergeConflict: MergeConflictState?
+
+    /// Rebuilds rows after `mergeConflict` changes.
+    func reloadRows() {
+        rebuildRows()
+        requestHighlight()
+    }
+    var onMergeConflictActionClick: ((Int, MergeConflictResolution) -> Void)?
+    var renderMergeConflictActionView: ((Int) -> NSView?)?
+
+    /// Unresolved files always render unified without inline diffs
+    /// (`UnresolvedFileHunksRenderer.getOptionsWithDefaults`).
+    private var effectiveOptions: DiffsDiffOptions { effectiveOptions(options) }
+
+    private func effectiveOptions(_ options: DiffsDiffOptions) -> DiffsDiffOptions {
+        guard mergeConflict != nil else { return options }
+        var options = options
+        options.diffStyle = .unified
+        options.lineDiffType = .none
+        return options
+    }
+
+    override func grid(_ grid: CodeGridView, mergeConflictActionViewFor conflictIndex: Int) -> NSView? {
+        renderMergeConflictActionView?(conflictIndex)
+    }
+
+    override func grid(_ grid: CodeGridView, mergeConflictAction resolution: MergeConflictResolution, conflictIndex: Int) {
+        onMergeConflictActionClick?(conflictIndex, resolution)
     }
 
     // MARK: - Highlighting
@@ -272,7 +322,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         guard let fileDiff else { return }
         let hasContent = !fileDiff.additionLines.isEmpty || !fileDiff.deletionLines.isEmpty
         guard hasContent else { return }
-        let key = HighlightKey(diff: fileDiff, options: options.renderDiffOptions, forcePlainText: isMassive)
+        let key = HighlightKey(diff: fileDiff, options: effectiveOptions.renderDiffOptions, forcePlainText: isMassive)
         if key == highlightKey || key == pendingHighlightKey { return }
         pendingHighlightKey = key
         let lineCount = max(fileDiff.additionLines.count, fileDiff.deletionLines.count)

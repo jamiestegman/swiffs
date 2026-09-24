@@ -4,7 +4,7 @@
 // Usage: swiffs-snapshot <case.json> <output.png>
 //
 // Case JSON format:
-//   { "kind": "diff" | "file", "scheme": "light" | "dark", "width": 900,
+//   { "kind": "diff" | "file" | "unresolved", "scheme": "light" | "dark", "width": 900,
 //     "oldFile": {...}, "newFile": {...}, "file": {...},
 //     "options": { "diffStyle": "split", "hunkSeparators": "line-info", ... },
 //     "annotations": [{ "side": "additions", "lineNumber": 4 }],
@@ -65,6 +65,8 @@ struct Case: Decodable {
     var options: Options?
     var annotations: [Annotation]?
     var selectedLines: SelectedLineRange?
+    /// Points (in view coordinates, top-left origin) clicked before capture.
+    var clicks: [[Double]]?
 }
 
 @MainActor
@@ -93,8 +95,16 @@ func run() throws {
         if let value = o.theme { options.code.theme = value.selection }
     }
 
-    let view: DiffsDocumentView
-    if testCase.kind == "file", let file = testCase.file {
+    let view: NSView
+    let preferredHeight: (CGFloat) -> CGFloat
+    if testCase.kind == "unresolved", let file = testCase.file {
+        let unresolvedView = UnresolvedFileView<Void>(options: options)
+        unresolvedView.appearance = appearance
+        unresolvedView.diffView.synchronousHighlightLineLimit = .max
+        try unresolvedView.render(file: file)
+        view = unresolvedView
+        preferredHeight = unresolvedView.preferredHeight(forWidth:)
+    } else if testCase.kind == "file", let file = testCase.file {
         let fileView = FileView<Void>(options: options.code)
         fileView.appearance = appearance
         fileView.renderAnnotation = { annotation in
@@ -105,6 +115,7 @@ func run() throws {
         fileView.render(file: file, lineAnnotations: (testCase.annotations ?? []).map { LineAnnotation(lineNumber: $0.lineNumber) })
         if let selected = testCase.selectedLines { fileView.setSelectedLines(selected) }
         view = fileView
+        preferredHeight = fileView.preferredHeight(forWidth:)
     } else {
         let diffView = FileDiffView<Void>(options: options)
         diffView.appearance = appearance
@@ -120,12 +131,38 @@ func run() throws {
         try diffView.render(oldFile: testCase.oldFile, newFile: testCase.newFile, lineAnnotations: annotations)
         if let selected = testCase.selectedLines { diffView.setSelectedLines(selected) }
         view = diffView
+        preferredHeight = diffView.preferredHeight(forWidth:)
     }
     view.frame = CGRect(x: 0, y: 0, width: width, height: 100)
-    let height = view.preferredHeight(forWidth: width)
-    view.frame = CGRect(x: 0, y: 0, width: width, height: height)
+    view.frame = CGRect(x: 0, y: 0, width: width, height: preferredHeight(width))
     view.layoutSubtreeIfNeeded()
 
+    if let clicks = testCase.clicks, !clicks.isEmpty {
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = view
+        for click in clicks {
+            let height = view.frame.height
+            let location = CGPoint(x: click[0], y: height - click[1])
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(
+                    with: type, location: location, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+                )!
+                // `sendEvent` does not dispatch to offscreen windows.
+                guard let target = window.contentView?.hitTest(location) else { continue }
+                if type == .leftMouseDown { target.mouseDown(with: event) } else { target.mouseUp(with: event) }
+            }
+            let newHeight = preferredHeight(width)
+            view.frame = CGRect(x: 0, y: 0, width: width, height: newHeight)
+            window.setContentSize(view.frame.size)
+            view.layoutSubtreeIfNeeded()
+        }
+        view.removeFromSuperview()
+        view.frame = CGRect(x: 0, y: 0, width: width, height: preferredHeight(width))
+        view.layoutSubtreeIfNeeded()
+    }
+
+    let height = view.frame.height
     let scale: CGFloat = 2
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil,

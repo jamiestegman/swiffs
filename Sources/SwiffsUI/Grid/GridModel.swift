@@ -30,6 +30,7 @@ struct GridModel {
     /// Drives the line number column width.
     var totalLines: Int
     var hasMergeConflict = false
+    var mergeConflictActionsType: MergeConflictActionsType = .default
 
     static let empty = GridModel(kind: .diff, rows: [], isSplit: false, columnCount: 1, hasDeletionsColumn: false, hasAdditionsColumn: false, totalLines: 0)
 

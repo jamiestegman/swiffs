@@ -16,8 +16,34 @@ public struct DiffsEditorOptions {
     public var matchBrackets = true
     public var autoSurround: AutoSurround = .default
     public var languageCommentConfig: [String: LanguageConfig]?
+    /// Inline edit prediction (`editPrediction`).
+    public var editPrediction: DiffsEditPredictionOptions?
 
     public init() {}
+}
+
+/// Inline edit prediction configuration.
+public struct DiffsEditPredictionOptions {
+    public enum Mode: Sendable {
+        /// Predictions appear as the user types.
+        case eager
+        /// Holding Alt shows predictions.
+        case subtle
+    }
+
+    public var mode: Mode
+    public var provider: any EditPredictProvider
+    /// Path patterns to include (nil includes every file).
+    public var include: [EditPredictionPattern]?
+    /// Path patterns to exclude; exclusions win.
+    public var exclude: [EditPredictionPattern]?
+
+    public init(provider: any EditPredictProvider, mode: Mode = .eager, include: [EditPredictionPattern]? = nil, exclude: [EditPredictionPattern]? = nil) {
+        self.provider = provider
+        self.mode = mode
+        self.include = include
+        self.exclude = exclude
+    }
 }
 
 /// An externally owned caret or selection shown in the editor
@@ -116,6 +142,12 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     private var markerShowWork: DispatchWorkItem?
     private var selectionActionView: EditorPopoverView?
     private var canMountSelectionAction = false
+    private var predictionHistory: [EditPredictionHistoryRecord] = []
+    private var prediction: (version: Int, cursorOffset: Int, edits: [ResolvedTextEdit], response: EditPredictResponse)?
+    private var predictionTask: Task<Void, Never>?
+    private var predictionGeneration = 0
+    private var predictionPreview: EditorPopoverView?
+    private var predictionRevealed = false
     private var compiledKeymap: CompiledEditorKeymap?
 
     private enum LineSlot {
@@ -192,6 +224,8 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         markedText = nil
         removeMarkerPopover()
         closeSelectionAction()
+        cancelPrediction()
+        predictionHistory = []
         carets = []
     }
 
@@ -326,8 +360,9 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
 
     /// Updates line slots, tokens, selections and the view after a change
     /// (`#applyChange`).
-    private func applyChange(_ change: TextDocumentChange, _ nextSelections: [EditorSelection]?, annotations: [Annotation]?, refreshSearch shouldRefreshSearch: Bool = true) {
+    private func applyChange(_ change: TextDocumentChange, _ nextSelections: [EditorSelection]?, annotations: [Annotation]?, refreshSearch shouldRefreshSearch: Bool = true, source: EditPredictionSource = .user) {
         guard let document, let host else { return }
+        cancelPrediction()
         // Splice line slots: each per-edit range replaces the old lines it
         // covered with fresh (pending) lines.
         for lineChange in change.changedLineChanges {
@@ -377,9 +412,192 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         if let file = getFile() {
             onChange?(DiffsEditorChangeEvent(changes: change.changes, file: file))
         }
+        recordPredictionHistory(change, source: source)
+        if source == .user { schedulePrediction() }
+    }
+
+    // MARK: - Edit prediction
+
+    private func includesPredictionPath(_ path: String) -> Bool {
+        guard let options = options.editPrediction else { return false }
+        let normalized = path.replacingOccurrences(of: "\\", with: "/")
+        let included = options.include?.contains { matchesEditPredictionPattern(normalized, $0) } ?? true
+        let excluded = options.exclude?.contains { matchesEditPredictionPattern(normalized, $0) } ?? false
+        return included && !excluded
+    }
+
+    private func recordPredictionHistory(_ change: TextDocumentChange, source: EditPredictionSource) {
+        guard let document, options.editPrediction != nil, includesPredictionPath(fileInfo.name) else { return }
+        predictionHistory = recordEditPrediction(predictionHistory, path: fileInfo.name, document: document, change: change, source: source)
+    }
+
+    private func cancelPrediction() {
+        predictionTask?.cancel()
+        predictionTask = nil
+        predictionGeneration += 1
+        prediction = nil
+        predictionRevealed = false
+        predictionPreview?.removeFromSuperview()
+        predictionPreview = nil
+        host?.editorGrid.needsDisplay = true
+    }
+
+    /// Debounced request to the provider (`#scheduleEditPrediction`).
+    private func schedulePrediction() {
+        cancelPrediction()
+        guard let options = options.editPrediction, let document, selections.count == 1, let selection = selections.first, selection.isCollapsed,
+              includesPredictionPath(fileInfo.name)
+        else { return }
+        let cursorOffset = document.offsetAt(selection.focus)
+        let generation = predictionGeneration
+        let path = fileInfo.name
+        predictionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self, self.predictionGeneration == generation, let document = self.document else { return }
+            guard let request = buildEditPredictionRequest(
+                path: path,
+                document: document,
+                cursorOffset: cursorOffset,
+                history: self.predictionHistory,
+                isLineEditable: { [weak self] line in self?.host?.editorGrid.editorLocation(ofLine: line) != nil }
+            ) else { return }
+            let response: EditPredictResponse
+            do {
+                response = try await options.provider.predict(request)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, self.predictionGeneration == generation else { return }
+            self.acceptResponse(response, request: request, cursorOffset: cursorOffset)
+        }
+    }
+
+    /// Validates a response (`#scheduleEditPrediction` response checks).
+    private func acceptResponse(_ response: EditPredictResponse, request: EditPredictRequest, cursorOffset: Int) {
+        guard let document, document.version == request.version, selections.count == 1, let selection = selections.first,
+              selection.isCollapsed, document.offsetAt(selection.focus) == cursorOffset,
+              !response.edits.isEmpty, response.edits.count <= 256
+        else { return }
+        let excerptStart = document.offsetAt(Position(line: request.excerptStartLine, character: 0))
+        let editableStart = excerptStart + request.editableRange.start
+        let editableEnd = excerptStart + request.editableRange.end
+        var bytes = 0
+        var resolved: [ResolvedTextEdit] = []
+        for edit in response.edits {
+            guard isValidPredictionPosition(edit.range.start), isValidPredictionPosition(edit.range.end), edit.range.start <= edit.range.end else { return }
+            bytes += edit.newText.utf8.count
+            if bytes > 128 * 1024 { return }
+            let start = document.offsetAt(edit.range.start)
+            let end = document.offsetAt(edit.range.end)
+            let resolvedEdit = document.resolveEdits([edit])[0]
+            guard resolvedEdit.start == start, resolvedEdit.end == end else { return }
+            resolved.append(resolvedEdit)
+        }
+        resolved.sort { $0.start != $1.start ? $0.start < $1.start : $0.end < $1.end }
+        for (index, edit) in resolved.enumerated() {
+            if edit.start < editableStart || edit.end > editableEnd || (index > 0 && resolved[index - 1].end > edit.start) { return }
+        }
+        let edits = resolved.filter { !$0.text.utf16.elementsEqual(document.getTextSlice($0.start, $0.end).utf16) }
+        guard !edits.isEmpty, response.newCursor.line >= 0, response.newCursor.character >= 0 else { return }
+        prediction = (document.version, cursorOffset, edits, response)
+        predictionRevealed = options.editPrediction?.mode == .eager
+        renderPrediction()
+    }
+
+    private func isValidPredictionPosition(_ position: Position) -> Bool {
+        guard let document, position.line >= 0, position.line < document.lineCount, position.character >= 0 else { return false }
+        return position.character <= document.getLineLength(position.line)
+    }
+
+    var editorGhostText: [(position: Position, text: String)] {
+        guard predictionRevealed, let prediction, let document, predictionPreview == nil else { return [] }
+        return prediction.edits.compactMap { edit in
+            guard edit.start == edit.end, !edit.text.contains("\n"), !edit.text.contains("\r") else { return nil }
+            let position = document.positionAt(edit.start)
+            return position.character == document.getLineLength(position.line) ? (position, edit.text) : nil
+        }
+    }
+
+    /// Shows the prediction: inline ghost text when it is a line-end
+    /// insertion, otherwise a preview of the predicted lines.
+    private func renderPrediction() {
+        predictionPreview?.removeFromSuperview()
+        predictionPreview = nil
+        guard predictionRevealed, let prediction, let document, let host else {
+            host?.editorGrid.needsDisplay = true
+            return
+        }
+        let inlineOnly = prediction.edits.allSatisfy { edit in
+            let position = document.positionAt(edit.start)
+            return edit.start == edit.end && !edit.text.contains("\n") && !edit.text.contains("\r") && position.character == document.getLineLength(position.line)
+        }
+        if !inlineOnly {
+            let first = document.positionAt(prediction.edits[0].start)
+            let last = document.positionAt(prediction.edits[prediction.edits.count - 1].end)
+            let affectedStart = document.offsetAt(Position(line: first.line, character: 0))
+            let affectedEnd = document.offsetAt(Position(line: last.line, character: document.getLineLength(last.line)))
+            var predicted = ""
+            var consumed = affectedStart
+            for edit in prediction.edits {
+                predicted += document.getTextSlice(consumed, edit.start) + edit.text
+                consumed = edit.end
+            }
+            predicted += document.getTextSlice(consumed, affectedEnd)
+            let label = NSTextField(labelWithString: predicted)
+            label.font = host.editorGrid.style.regularFont
+            label.textColor = NSColor.labelColor.withAlphaComponent(0.7)
+            let hint = NSTextField(labelWithString: "Tab to accept, Esc to dismiss")
+            hint.font = .systemFont(ofSize: 10)
+            hint.textColor = .secondaryLabelColor
+            let stack = NSStackView(views: [label, hint])
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 4
+            if let anchor = host.editorGrid.editorCaretRect(last) {
+                let popover = EditorPopoverView(content: stack)
+                let container = host.editorOverlayContainer
+                popover.place(in: container, anchor: host.editorGrid.convert(anchor, to: container), maxWidth: 640, preferAbove: false)
+                container.addSubview(popover)
+                predictionPreview = popover
+            }
+        }
+        host.editorGrid.needsDisplay = true
+    }
+
+    private var predictionOverlays: [GridEditorOverlay] {
+        guard predictionRevealed, let prediction, let document else { return [] }
+        return prediction.edits.filter { $0.end > $0.start }.map {
+            GridEditorOverlay(range: DocumentRange(start: document.positionAt($0.start), end: document.positionAt($0.end)), kind: .predictionDeletion)
+        }
+    }
+
+    /// Applies the prediction (`#acceptEditPrediction`).
+    private func acceptPrediction() -> Bool {
+        guard predictionRevealed, let prediction, let document, document.version == prediction.version,
+              selections.count == 1, let selection = selections.first, selection.isCollapsed,
+              document.offsetAt(selection.focus) == prediction.cursorOffset
+        else { return false }
+        cancelPrediction()
+        guard let change = try? document.applyResolvedEdits(prediction.edits, selectionsBefore: selections, undoBoundary: true) else { return true }
+        let cursor = document.normalizePosition(prediction.response.newCursor)
+        let next = [EditorSelection(caret: cursor)]
+        document.setLastUndoSelectionsAfter(next)
+        applyChange(change, next, annotations: applyChangeToLineAnnotations(change), source: .prediction)
+        return true
+    }
+
+    /// Subtle mode shows predictions while Alt is held.
+    func editorModifiersChanged(_ flags: NSEvent.ModifierFlags) {
+        guard options.editPrediction?.mode == .subtle, prediction != nil else { return }
+        let reveal = flags.contains(.option)
+        if reveal != predictionRevealed {
+            predictionRevealed = reveal
+            renderPrediction()
+        }
     }
 
     private func updateSelections(_ next: [EditorSelection]) {
+        if prediction != nil, next != selections { cancelPrediction() }
         selections = next
         updateBracketMatch()
         host?.editorGrid.restartCaretBlink()
@@ -744,6 +962,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         for marker in markers {
             overlays.append(GridEditorOverlay(range: marker.range, kind: .marker(marker.severity)))
         }
+        overlays.append(contentsOf: predictionOverlays)
         for entry in carets where entry.caret.anchor != entry.caret.focus {
             let start = min(entry.caret.anchor, entry.caret.focus)
             let end = max(entry.caret.anchor, entry.caret.focus)
@@ -775,6 +994,17 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     func editorKeyDown(_ event: NSEvent) -> Bool {
         guard let document else { return false }
         let keyEvent = editorKeyEvent(from: event)
+        if keyEvent.key == "Tab", !keyEvent.shiftKey, !keyEvent.ctrlKey, !keyEvent.metaKey,
+           !keyEvent.altKey || options.editPrediction?.mode == .subtle, prediction != nil, predictionRevealed
+        {
+            // Visible prediction owns Tab even when acceptance fails.
+            _ = acceptPrediction()
+            return true
+        }
+        if keyEvent.key == "Escape", prediction != nil {
+            cancelPrediction()
+            return true
+        }
         if let searchPanel, let direction = resolveFindAgainShortcut(keyEvent) {
             searchPanel.navigate(previous: direction == .previous)
             return true

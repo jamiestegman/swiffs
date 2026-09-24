@@ -35,6 +35,8 @@ protocol GridEditorClient: AnyObject {
     /// Theme colors for search matches (`editor.findMatchHighlightBackground`)
     /// and bracket matches (`editorBracketMatch.background`).
     var editorSearchMatchColor: CGColor? { get }
+    /// Inline ghost text (edit prediction) drawn after a position.
+    var editorGhostText: [(position: Position, text: String)] { get }
     var editorBracketMatchColor: CGColor? { get }
     var editorMarkedText: (text: String, range: DocumentRange)? { get }
 
@@ -49,6 +51,7 @@ protocol GridEditorClient: AnyObject {
     func editorFocusChanged(_ focused: Bool)
     /// Pointer hover (for marker popovers); `point` is in grid coordinates.
     func editorMouseMoved(to position: Position?, point: CGPoint)
+    func editorModifiersChanged(_ flags: NSEvent.ModifierFlags)
     func editorPerform(_ action: GridEditorAction)
     func editorCanPerform(_ action: GridEditorAction) -> Bool
 }
@@ -245,6 +248,12 @@ extension CodeGridView {
             for rect in editorRangeRects(marked.range, line: line, row: row, column: column, extendsPastLineEnd: false) {
                 context.fill(CGRect(x: rect.minX, y: rect.maxY - 2, width: rect.width, height: 1))
             }
+        }
+        for ghost in client.editorGhostText where ghost.position.line == line.lineIndex {
+            guard let rect = editorCaretRect(ghost.position) else { continue }
+            let color = style.cgColor(style.palette.fg.withAlpha(style.palette.fg.a * 0.45))
+            let textLine = makeTextLine(ghost.text, font: style.regularFont, color: color)
+            drawTextLine(textLine, in: context, x: rect.minX, baseline: rect.minY + style.baseline)
         }
         for caret in client.editorRemoteCarets where caret.position.line == line.lineIndex {
             if let rect = editorCaretRect(caret.position) {

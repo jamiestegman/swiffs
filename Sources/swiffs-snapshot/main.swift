@@ -77,6 +77,8 @@ struct Case: Decodable {
     var carets: [[Int]]?
     /// `[startLine, startChar, endLine, endChar, severity]` markers.
     var markers: [[String]]?
+    /// A stub prediction: `[line, character, text]` inserted at a position.
+    var prediction: [String]?
 
     struct EditAction: Decodable {
         var type: String
@@ -143,6 +145,11 @@ func run() throws {
             documentView = fileView
             fileView.frame = CGRect(x: 0, y: 0, width: width, height: fileView.preferredHeight(forWidth: width))
             let editor = DiffsEditor<LineAnnotation<Void>>()
+            if let prediction = testCase.prediction {
+                editor.options.editPrediction = DiffsEditPredictionOptions(provider: StubPredictionProvider(
+                    line: Int(prediction[0])!, character: Int(prediction[1])!, text: prediction[2]
+                ))
+            }
             _ = editor.edit(fileView)
             let colors: [NSColor] = [.systemPink, .systemPurple, .systemOrange]
             editor.setCarets((testCase.carets ?? []).enumerated().map { index, c in
@@ -181,6 +188,9 @@ func run() throws {
                     characters: action.chars ?? "", charactersIgnoringModifiers: action.chars ?? "", isARepeat: false, keyCode: action.keyCode ?? 0
                 )!
                 if !grid.performKeyEquivalent(with: event) { grid.keyDown(with: event) }
+            case "wait":
+                let deadline = Date().addingTimeInterval(Double(action.text ?? "0.5") ?? 0.5)
+                while Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
             case "click":
                 let location = grid.convert(CGPoint(x: action.x ?? 0, y: action.y ?? 0), from: documentView)
                 let windowPoint = grid.convert(location, to: nil)
@@ -358,5 +368,19 @@ MainActor.assumeIsolated {
     } catch {
         FileHandle.standardError.write("error: \(error)\n".data(using: .utf8)!)
         exit(1)
+    }
+}
+
+struct StubPredictionProvider: EditPredictProvider {
+    var line: Int
+    var character: Int
+    var text: String
+
+    func predict(_ request: EditPredictRequest) async throws -> EditPredictResponse {
+        let position = Position(line: line, character: character)
+        return EditPredictResponse(
+            edits: [TextEdit(range: DocumentRange(start: position, end: position), newText: text)],
+            newCursor: Position(line: line, character: character + text.utf16.count)
+        )
     }
 }

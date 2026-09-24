@@ -1484,6 +1484,11 @@ final class CodeGridView: NSView {
         return resigned
     }
 
+    override func flagsChanged(with event: NSEvent) {
+        editing.client?.editorModifiersChanged(event.modifierFlags)
+        super.flagsChanged(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         guard let client = editing.client else {
             super.keyDown(with: event)

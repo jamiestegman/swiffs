@@ -23,7 +23,7 @@ func firstDifference<T: Encodable>(_ lhs: T, _ rhs: T) -> String? {
     return diffJSON(a, b, path: "$")
 }
 
-private func diffJSON(_ a: Any, _ b: Any, path: String) -> String? {
+func diffJSON(_ a: Any, _ b: Any, path: String) -> String? {
     switch (a, b) {
     case let (a as [String: Any], b as [String: Any]):
         for key in Set(a.keys).union(b.keys).sorted() {

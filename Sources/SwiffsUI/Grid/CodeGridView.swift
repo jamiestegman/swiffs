@@ -1234,7 +1234,7 @@ final class CodeGridView: NSView {
             if let client = editing.client, let position = editorPosition(at: point) {
                 window?.makeFirstResponder(self)
                 editing.isDragging = true
-                client.editorMouseDown(at: position, clickCount: event.clickCount, modifiers: event.modifierFlags)
+                client.editorMouseDown(at: position, clickCount: event.clickCount, modifiers: event.modifierFlags, point: point)
                 restartCaretBlink()
                 return
             }
@@ -1245,7 +1245,7 @@ final class CodeGridView: NSView {
             if let client = editing.client, case .none = hit, let position = editorPosition(at: point) {
                 window?.makeFirstResponder(self)
                 editing.isDragging = true
-                client.editorMouseDown(at: position, clickCount: event.clickCount, modifiers: event.modifierFlags)
+                client.editorMouseDown(at: position, clickCount: event.clickCount, modifiers: event.modifierFlags, point: point)
                 restartCaretBlink()
                 return
             }
@@ -1296,7 +1296,7 @@ final class CodeGridView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         autoscroll(with: event)
         if editing.isDragging, let client = editing.client {
-            if let position = editorPosition(at: point) { client.editorMouseDragged(to: position) }
+            if let position = editorPosition(at: point) { client.editorMouseDragged(to: position, point: point) }
             return
         }
         if textDrag != nil {

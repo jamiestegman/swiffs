@@ -193,6 +193,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     private var searchMatches: [(start: Int, end: Int)] = []
     private var markedText: (text: String, range: DocumentRange)?
     private var dragAnchor: EditorSelection?
+    private var columnDrag: (anchor: Position, startX: CGFloat)?
     private var reservedSelections: [EditorSelection]?
     private var carets: [(caret: DiffsEditorCaret, anchorOffset: Int, focusOffset: Int)] = []
     private var markerPopover: EditorPopoverView?
@@ -1288,8 +1289,15 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         grid.scrollEditorCaretToVisible()
     }
 
-    func editorMouseDown(at position: Position, clickCount: Int, modifiers: NSEvent.ModifierFlags) {
+    func editorMouseDown(at position: Position, clickCount: Int, modifiers: NSEvent.ModifierFlags, point: CGPoint) {
         guard let document else { return }
+        columnDrag = nil
+        if modifiers.contains(.option), !modifiers.contains(.command), !modifiers.contains(.control), !modifiers.contains(.shift) {
+            // Alt+drag selects a column (`#updateAltColumnSelections`).
+            columnDrag = (position, point.x)
+            updateSelections([EditorSelection(caret: position)])
+            return
+        }
         let caret = EditorSelection(caret: position)
         let primaryModifier = isPrimaryModifier(metaKey: modifiers.contains(.command), ctrlKey: modifiers.contains(.control))
         if modifiers.contains(.shift), !selections.isEmpty {
@@ -1310,7 +1318,34 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         updateSelections(mergeOverlappingSelections((reservedSelections ?? []) + [selection]))
     }
 
-    func editorMouseDragged(to position: Position) {
+    func editorMouseDragged(to position: Position, point: CGPoint) {
+        if let columnDrag, let document, let host {
+            let raw = (point.x - columnDrag.startX) / host.editorGrid.style.ch
+            let delta = raw < 0 ? -Int((-raw).rounded()) : Int(raw.rounded())
+            let anchor = columnDrag.anchor
+            let focusCharacter = max(0, anchor.character + delta)
+            var next: [EditorSelection] = []
+            let step = position.line < anchor.line ? -1 : 1
+            var line = anchor.line
+            while true {
+                if host.editorGrid.editorLocation(ofLine: line) != nil {
+                    let units = document.getLineUnits(line)
+                    let anchorOffset = min(anchor.character, units.count)
+                    let focusOffset = min(focusCharacter, units.count)
+                    let anchorCharacter = snapCharacterToGraphemeBoundary(String(decoding: units, as: UTF16.self), anchorOffset)
+                    let lineFocus = focusOffset == anchorOffset ? anchorCharacter : snapCharacterToGraphemeBoundary(String(decoding: units, as: UTF16.self), focusOffset)
+                    next.append(EditorSelection(
+                        start: Position(line: line, character: min(anchorCharacter, lineFocus)),
+                        end: Position(line: line, character: max(anchorCharacter, lineFocus)),
+                        direction: anchorCharacter == lineFocus ? .none : anchorCharacter < lineFocus ? .forward : .backward
+                    ))
+                }
+                if line == position.line { break }
+                line += step
+            }
+            updateSelections(next)
+            return
+        }
         guard let anchor = dragAnchor else { return }
         let next = createSelectionFrom(anchor, EditorSelection(caret: position))
         updateSelections(mergeOverlappingSelections((reservedSelections ?? []) + [next]))
@@ -1318,6 +1353,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     }
 
     func editorMouseUp() {
+        columnDrag = nil
         dragAnchor = nil
         reservedSelections = nil
         canMountSelectionAction = true

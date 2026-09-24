@@ -249,6 +249,18 @@ func run() throws {
                     characters: action.chars ?? "", charactersIgnoringModifiers: action.chars ?? "", isARepeat: false, keyCode: action.keyCode ?? 0
                 )!
                 if !grid.performKeyEquivalent(with: event) { grid.keyDown(with: event) }
+            case "drag":
+                var flags: NSEvent.ModifierFlags = []
+                if action.mods?.contains("alt") == true { flags.insert(.option) }
+                let parts = (action.text ?? "0,0").split(separator: ",").compactMap { Double($0) }
+                let from = grid.convert(grid.convert(CGPoint(x: action.x ?? 0, y: action.y ?? 0), from: documentView), to: nil)
+                let to = grid.convert(grid.convert(CGPoint(x: parts[0], y: parts[1]), from: documentView), to: nil)
+                func mouse(_ type: NSEvent.EventType, _ location: CGPoint) -> NSEvent {
+                    NSEvent.mouseEvent(with: type, location: location, modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                }
+                grid.mouseDown(with: mouse(.leftMouseDown, from))
+                grid.mouseDragged(with: mouse(.leftMouseDragged, to))
+                grid.mouseUp(with: mouse(.leftMouseUp, to))
             case "complete":
                 finish(true)
             case "discard":

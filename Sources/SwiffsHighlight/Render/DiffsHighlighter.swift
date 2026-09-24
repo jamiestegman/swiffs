@@ -14,6 +14,10 @@ public final class DiffsHighlighter {
     private var attachedLanguages: Set<String> = []
     private var attachedThemes: Set<String> = []
     private var attachedGeneration: Int
+    /// When set, `renderDiff` tokenizes the deletion side on this
+    /// highlighter while this one tokenizes the addition side. It must not be
+    /// used elsewhere during the call.
+    public var sideHighlighter: DiffsHighlighter?
 
     public init(registry: HighlighterRegistry = .shared) {
         self.registry = registry

@@ -61,6 +61,9 @@ public final class HighlightWorkerPool: @unchecked Sendable {
         init(index: Int, registry: HighlighterRegistry) {
             queue = DispatchQueue(label: "swiffs.highlight.worker.\(index)", qos: .userInitiated)
             highlighter = DiffsHighlighter(registry: registry)
+            // Owned by this worker, so large diffs tokenize both sides at once
+            // without borrowing another worker.
+            highlighter.sideHighlighter = DiffsHighlighter(registry: registry)
         }
     }
 

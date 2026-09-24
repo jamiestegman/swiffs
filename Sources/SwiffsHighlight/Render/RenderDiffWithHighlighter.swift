@@ -71,7 +71,30 @@ private struct HighlightSegment {
     var count: Int
 }
 
-private final class RenderBucket {
+/// Results of rendering both sides concurrently.
+/// Each closure uses its own highlighter, and each result is written by one
+/// thread and read after both finish.
+private final class ConcurrentSides: @unchecked Sendable {
+    let renderDeletions: () throws -> [HighlightedLine]
+    let renderAdditions: () throws -> [HighlightedLine]
+    var deletions: Result<[HighlightedLine], Error>?
+    var additions: Result<[HighlightedLine], Error>?
+
+    init(renderDeletions: @escaping () throws -> [HighlightedLine], renderAdditions: @escaping () throws -> [HighlightedLine]) {
+        self.renderDeletions = renderDeletions
+        self.renderAdditions = renderAdditions
+    }
+
+    func run(_ index: Int) {
+        if index == 0 {
+            deletions = Result { try renderDeletions() }
+        } else {
+            additions = Result { try renderAdditions() }
+        }
+    }
+}
+
+private final class RenderBucket: @unchecked Sendable {
     var deletionContent = ""
     var deletionCount = 0
     var additionContent = ""
@@ -83,6 +106,9 @@ private final class RenderBucket {
 }
 
 extension DiffsHighlighter {
+    /// Sides with fewer lines are tokenized serially.
+    static let concurrentSideLineThreshold = 200
+
     /// Port of `renderDiffWithHighlighter`.
     public func renderDiff(
         _ diff: FileDiffMetadata,
@@ -182,20 +208,42 @@ extension DiffsHighlighter {
         for index in bucketOrder {
             let bucket = buckets[index]!
             if bucket.deletionCount == 0, bucket.additionCount == 0 { continue }
-            let deletionLines = bucket.deletionContent.isEmpty ? [] : try renderLines(
-                cleanLastNewline(bucket.deletionContent),
-                lang: deletionLang,
-                slots: slots,
-                decorations: bucket.deletionDecorations,
-                tokenizeMaxLineLength: options.tokenizeMaxLineLength
-            )
-            let additionLines = bucket.additionContent.isEmpty ? [] : try renderLines(
-                cleanLastNewline(bucket.additionContent),
-                lang: additionLang,
-                slots: slots,
-                decorations: bucket.additionDecorations,
-                tokenizeMaxLineLength: options.tokenizeMaxLineLength
-            )
+            let renderDeletions = { (highlighter: DiffsHighlighter) in
+                bucket.deletionContent.isEmpty ? [] : try highlighter.renderLines(
+                    cleanLastNewline(bucket.deletionContent),
+                    lang: deletionLang,
+                    slots: slots,
+                    decorations: bucket.deletionDecorations,
+                    tokenizeMaxLineLength: options.tokenizeMaxLineLength
+                )
+            }
+            let renderAdditions = {
+                bucket.additionContent.isEmpty ? [] : try self.renderLines(
+                    cleanLastNewline(bucket.additionContent),
+                    lang: additionLang,
+                    slots: slots,
+                    decorations: bucket.additionDecorations,
+                    tokenizeMaxLineLength: options.tokenizeMaxLineLength
+                )
+            }
+            let deletionLines: [HighlightedLine]
+            let additionLines: [HighlightedLine]
+            if let side = sideHighlighter, !forcePlainText,
+               min(bucket.deletionCount, bucket.additionCount) >= Self.concurrentSideLineThreshold
+            {
+                // Tokenize the two sides concurrently; each highlighter is
+                // used by one thread only.
+                try side.prepare(langs: [deletionLang], themes: slots.themeNames)
+                let results = ConcurrentSides(renderDeletions: { try renderDeletions(side) }, renderAdditions: renderAdditions)
+                DispatchQueue.concurrentPerform(iterations: 2) { index in
+                    results.run(index)
+                }
+                deletionLines = try results.deletions!.get()
+                additionLines = try results.additions!.get()
+            } else {
+                deletionLines = try renderDeletions(self)
+                additionLines = try renderAdditions()
+            }
             if shouldGroupAll {
                 for (i, line) in deletionLines.enumerated() where i < deletionResult.count { deletionResult[i] = line }
                 for (i, line) in additionLines.enumerated() where i < additionResult.count { additionResult[i] = line }

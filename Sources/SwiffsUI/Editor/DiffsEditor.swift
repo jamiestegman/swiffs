@@ -1296,7 +1296,15 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         case #selector(NSResponder.deleteWordBackward(_:)):
             perform { try applyDeleteWordBackwardToSelections($0, $1, lineAnnotations: $2) }
         case #selector(NSResponder.deleteToBeginningOfLine(_:)):
-            perform { try applyDeleteSoftLineBackwardToSelections($0, $1, lineAnnotations: $2) }
+            let getSoftLineStart: ((Int, Int) -> Int)? = host?.editorWraps == true ? { [weak self] line, character in
+                // Wrap offsets fall back to the whole line when unmeasured.
+                let offsets = self?.softLineOffsets(line) ?? [0, Int.max]
+                for w in 0 ..< offsets.count - 1 where character >= offsets[w] && character <= offsets[w + 1] {
+                    return offsets[w]
+                }
+                return 0
+            } : nil
+            perform { try applyDeleteSoftLineBackwardToSelections($0, $1, getSoftLineStart: getSoftLineStart, lineAnnotations: $2) }
         case #selector(NSResponder.deleteToEndOfLine(_:)), #selector(NSResponder.deleteToEndOfParagraph(_:)):
             perform { try applyDeleteHardLineForwardToSelections($0, $1, lineAnnotations: $2) }
         case #selector(NSResponder.transpose(_:)):

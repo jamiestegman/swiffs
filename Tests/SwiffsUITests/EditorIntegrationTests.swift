@@ -161,4 +161,26 @@ struct EditorIntegrationTests {
         #expect(before != nil)
         #expect(keywordColor() != before)
     }
+
+    @Test func softLineDeleteStopsAtWrapPoint() throws {
+        let long = String(repeating: "word ", count: 60)
+        let view = FileView<Void>()
+        var options = view.options
+        options.overflow = .wrap
+        view.options = options
+        view.render(file: FileContents(name: "a.txt", contents: long + "\n"))
+        let window = window(for: view)
+        let editor = DiffsEditor<LineAnnotation<Void>>()
+        _ = editor.edit(view)
+        window.makeFirstResponder(view.grid)
+        view.layoutSubtreeIfNeeded()
+        let end = long.utf16.count
+        editor.setSelections([EditorSelection(caret: Position(line: 0, character: end))])
+        view.grid.doCommand(by: #selector(NSResponder.deleteToBeginningOfLine(_:)))
+        let remaining = editor.getText().utf16.count - 1
+        // Only the last visual segment is removed.
+        #expect(remaining > 0)
+        #expect(remaining < end)
+        #expect(long.hasPrefix(String(editor.getText().dropLast())))
+    }
 }

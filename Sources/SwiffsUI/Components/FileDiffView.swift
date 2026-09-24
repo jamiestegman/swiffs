@@ -563,6 +563,24 @@ extension FileDiffView: EditorHost {
         setLineAnnotations(annotations)
     }
 
+    /// Expands the collapsed gap that hides an addition line
+    /// (`#revealLineIfCollapsed`).
+    func editorRevealLine(_ line: Int) {
+        guard grid.editorLocation(ofLine: line) == nil, let diff = fileDiff else { return }
+        var previousEnd = 0
+        for (index, hunk) in diff.hunks.enumerated() {
+            let start = getHunkSideStartBoundary(hunk.additionStart, hunk.additionCount)
+            if line >= previousEnd, line < start {
+                expandHunk(index, direction: .both, lineCount: Int.max)
+                return
+            }
+            previousEnd = getHunkSideEndBoundary(hunk.additionStart, hunk.additionCount)
+        }
+        if line >= previousEnd {
+            expandHunk(diff.hunks.count, direction: .both, lineCount: Int.max)
+        }
+    }
+
     var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? {
         { [weak self] line, direction in
             guard let self else { return line }

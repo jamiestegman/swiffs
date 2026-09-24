@@ -327,6 +327,8 @@ extension FileView: EditorHost {
 
     var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? { nil }
 
+    func editorRevealLine(_ line: Int) {}
+
     func editorDocumentChanged(_ change: TextDocumentChange?) {
         rebuildRows()
     }

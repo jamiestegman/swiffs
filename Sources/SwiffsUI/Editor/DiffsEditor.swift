@@ -154,6 +154,8 @@ protocol EditorHost: AnyObject {
     /// offset below its header.
     var editorOverlayContainer: NSView { get }
     var editorOverlayTop: CGFloat { get }
+    /// Expands collapsed context hiding a document line.
+    func editorRevealLine(_ line: Int)
     /// Fold skipping for vertical moves; nil when every line renders.
     var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? { get }
     /// Rebuild rows after the document changed.
@@ -386,6 +388,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         guard let host else { return }
         if let line, let document {
             let position = document.normalizePosition(Position(line: line, character: character))
+            host.editorRevealLine(position.line)
             updateSelections([EditorSelection(caret: position)])
         }
         host.editorGrid.window?.makeFirstResponder(host.editorGrid)
@@ -766,6 +769,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
             if selections.contains(where: \.isCollapsed) {
                 updateSelections(selections.map { $0.isCollapsed ? expandCollapsedSelectionToWord(document, $0) : $0 })
             } else if let next = findNextMatch(document, selections) {
+                if let primary = next.last { host?.editorRevealLine(primary.focus.line) }
                 updateSelections(next)
                 host?.editorGrid.scrollEditorCaretToVisible()
             }
@@ -804,10 +808,14 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         case .selectAll:
             updateSelections([getDocumentFullSelection(document)])
         case .moveCursorToDocStart, .moveCursorToDocEnd:
-            updateSelections([getDocumentBoundarySelection(document, atEnd: command == .moveCursorToDocEnd)])
+            let boundary = getDocumentBoundarySelection(document, atEnd: command == .moveCursorToDocEnd)
+            host?.editorRevealLine(boundary.focus.line)
+            updateSelections([boundary])
             host?.editorGrid.scrollEditorCaretToVisible()
         case .expandSelectionDocStart, .expandSelectionDocEnd:
-            updateSelections(extendSelections(selections, getDocumentBoundarySelection(document, atEnd: command == .expandSelectionDocEnd)))
+            let boundary = getDocumentBoundarySelection(document, atEnd: command == .expandSelectionDocEnd)
+            host?.editorRevealLine(boundary.focus.line)
+            updateSelections(extendSelections(selections, boundary))
             host?.editorGrid.scrollEditorCaretToVisible()
         case .undo:
             undo()
@@ -1002,7 +1010,9 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
 
     private func scrollToSearchMatch(_ match: (start: Int, end: Int)) {
         guard let document else { return }
-        updateSelections([createSelectionFromAnchorAndFocusOffsets(document, match.start, match.end)])
+        let selection = createSelectionFromAnchorAndFocusOffsets(document, match.start, match.end)
+        host?.editorRevealLine(selection.focus.line)
+        updateSelections([selection])
         host?.editorGrid.scrollEditorCaretToVisible()
     }
 

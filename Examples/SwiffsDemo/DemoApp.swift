@@ -4,6 +4,7 @@
 import AppKit
 import SwiftUI
 import SwiffsCore
+import SwiffsEditor
 import SwiffsHighlight
 import SwiffsUI
 
@@ -14,6 +15,8 @@ enum Example: String, CaseIterable, Identifiable {
     case markdown = "Markdown file"
     case ansi = "ANSI"
     case conflict = "Merge conflict"
+    case editFile = "Editor (file)"
+    case editDiff = "Editor (diff)"
 
     var id: String { rawValue }
 }
@@ -51,6 +54,8 @@ struct DemoView: View {
     @State private var hover = true
     @State private var selection: CodeViewLineSelection?
     @State private var conflictResetID = 0
+    @State private var editing = true
+    @State private var editedFile = FileContents(name: "example.ts", contents: resource("example_ts.txt"))
 
     private static let fileDiff: FileDiffMetadata = {
         (try? parseDiffFromFile(
@@ -126,6 +131,33 @@ struct DemoView: View {
             DiffsCodeList(items: [CodeViewItem<String>.file(id: "md", FileContents(name: "example.md", contents: resource("example_md.txt")))], options: codeViewOptions)
         case .ansi:
             DiffsCodeList(items: [CodeViewItem<String>.file(id: "ansi", FileContents(name: "output.log", contents: resource("fileAnsi.txt"), lang: "ansi"))], options: codeViewOptions)
+        case .editFile:
+            ScrollView {
+                DiffsFile<Void>(
+                    file: editedFile,
+                    options: diffOptions.code,
+                    edit: editing,
+                    onEditComplete: { event in
+                        editedFile = event.file
+                        return .accept
+                    }
+                )
+            }
+            .toolbar {
+                Toggle("Edit", isOn: $editing)
+            }
+        case .editDiff:
+            ScrollView {
+                DiffsFileDiff<Void>(
+                    fileDiff: Self.fileDiff,
+                    options: diffOptions,
+                    edit: editing,
+                    onEditComplete: { _ in .accept }
+                )
+            }
+            .toolbar {
+                Toggle("Edit", isOn: $editing)
+            }
         case .conflict:
             ScrollView {
                 DiffsUnresolvedFile(

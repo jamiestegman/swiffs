@@ -234,7 +234,8 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     @discardableResult
     public func edit<Metadata>(_ view: FileView<Metadata>) -> () -> Void where Annotation == LineAnnotation<Metadata> {
         attach(view, annotations: view.lineAnnotations)
-        return { [weak self] in self?.cleanUp() }
+        // Like upstream, the returned disposer completes the session.
+        return { [weak self] in self?.cleanUp(.complete) }
     }
 
     /// Ends the session, offering the result to the view's `onEditComplete`.
@@ -246,7 +247,8 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     @discardableResult
     public func edit<Metadata>(_ view: FileDiffView<Metadata>) -> () -> Void where Annotation == DiffLineAnnotation<Metadata> {
         attach(view, annotations: view.lineAnnotations)
-        return { [weak self] in self?.cleanUp() }
+        // Like upstream, the returned disposer completes the session.
+        return { [weak self] in self?.cleanUp(.complete) }
     }
 
     func attach(_ host: any EditorHost, annotations: [Annotation]?) {

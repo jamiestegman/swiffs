@@ -5,6 +5,7 @@
 import AppKit
 import SwiftUI
 import SwiffsCore
+import SwiffsEditor
 import SwiffsHighlight
 
 /// Renders a file diff (`<FileDiff />`). Sizes itself to its content height,
@@ -19,6 +20,12 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
     public var onLineClick: ((DiffsLineEvent) -> Void)?
     public var onLineSelected: ((SelectedLineRange?) -> Void)?
     public var onGutterUtilityClick: ((SelectedLineRange) -> Void)?
+    /// Makes the new side editable (`edit`).
+    public var edit = false
+    public var editorOptions = DiffsEditorOptions()
+    public var editStateKey: String?
+    public var onEditChange: ((DiffsEditorChangeEvent) -> Void)?
+    public var onEditComplete: ((FileDiffEditCompleteEvent<Metadata>) -> EditCompletionDecision)?
 
     public init(
         fileDiff: FileDiffMetadata,
@@ -28,8 +35,18 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
         renderAnnotation: ((DiffLineAnnotation<Metadata>) -> NSView?)? = nil,
         onLineClick: ((DiffsLineEvent) -> Void)? = nil,
         onLineSelected: ((SelectedLineRange?) -> Void)? = nil,
-        onGutterUtilityClick: ((SelectedLineRange) -> Void)? = nil
+        onGutterUtilityClick: ((SelectedLineRange) -> Void)? = nil,
+        edit: Bool = false,
+        editorOptions: DiffsEditorOptions = DiffsEditorOptions(),
+        editStateKey: String? = nil,
+        onEditChange: ((DiffsEditorChangeEvent) -> Void)? = nil,
+        onEditComplete: ((FileDiffEditCompleteEvent<Metadata>) -> EditCompletionDecision)? = nil
     ) {
+        self.edit = edit
+        self.editorOptions = editorOptions
+        self.editStateKey = editStateKey
+        self.onEditChange = onEditChange
+        self.onEditComplete = onEditComplete
         self.fileDiff = fileDiff
         self.options = options
         self.annotations = annotations
@@ -40,6 +57,15 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
         self.onGutterUtilityClick = onGutterUtilityClick
     }
 
+    @MainActor
+    public final class Coordinator {
+        var editor: DiffsEditor<DiffLineAnnotation<Metadata>>?
+        var dispose: (() -> Void)?
+        var accepted: (input: FileDiffMetadata, diff: FileDiffMetadata)?
+    }
+
+    public func makeCoordinator() -> Coordinator { Coordinator() }
+
     public func makeNSView(context: Context) -> FileDiffView<Metadata> {
         let view = FileDiffView<Metadata>(options: options)
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -47,15 +73,43 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
     }
 
     public func updateNSView(_ view: FileDiffView<Metadata>, context: Context) {
+        let coordinator = context.coordinator
         view.renderAnnotation = renderAnnotation
         view.onLineClick = onLineClick
         view.onLineSelected = onLineSelected
         view.onGutterUtilityClick = onGutterUtilityClick
+        view.onEditComplete = { event in
+            let decision = onEditComplete?(event) ?? .reject
+            if decision == .accept { coordinator.accepted = (event.originalFileDiff, event.fileDiff) }
+            return decision
+        }
         view.options = options
-        view.render(fileDiff: fileDiff, lineAnnotations: annotations)
+        if !edit, let dispose = coordinator.dispose {
+            coordinator.dispose = nil
+            dispose()
+        }
+        var resolved = fileDiff
+        if let accepted = coordinator.accepted {
+            if accepted.input == fileDiff { resolved = accepted.diff } else { coordinator.accepted = nil }
+        }
+        if coordinator.dispose == nil {
+            view.render(fileDiff: resolved, lineAnnotations: annotations)
+        }
         if view.selectedLines != selectedLines {
             view.setSelectedLines(selectedLines)
         }
+        if edit, coordinator.dispose == nil {
+            let editor = DiffsEditor<DiffLineAnnotation<Metadata>>(options: editorOptions, editStateKey: editStateKey)
+            editor.onChange = onEditChange
+            coordinator.editor = editor
+            coordinator.dispose = editor.edit(view)
+        } else {
+            coordinator.editor?.onChange = onEditChange
+        }
+    }
+
+    public static func dismantleNSView(_ view: FileDiffView<Metadata>, coordinator: Coordinator) {
+        coordinator.editor?.cleanUp(.discard)
     }
 
     public func sizeThatFits(_ proposal: ProposedViewSize, nsView: FileDiffView<Metadata>, context: Context) -> CGSize? {
@@ -88,6 +142,12 @@ public struct DiffsFile<Metadata>: NSViewRepresentable {
     public var renderAnnotation: ((LineAnnotation<Metadata>) -> NSView?)?
     public var onLineClick: ((DiffsLineEvent) -> Void)?
     public var onLineSelected: ((SelectedLineRange?) -> Void)?
+    /// Makes the file editable (`edit`).
+    public var edit: Bool
+    public var editorOptions: DiffsEditorOptions
+    public var editStateKey: String?
+    public var onEditChange: ((DiffsEditorChangeEvent) -> Void)?
+    public var onEditComplete: ((FileEditCompleteEvent<Metadata>) -> EditCompletionDecision)?
 
     public init(
         file: FileContents,
@@ -96,7 +156,12 @@ public struct DiffsFile<Metadata>: NSViewRepresentable {
         selectedLines: SelectedLineRange? = nil,
         renderAnnotation: ((LineAnnotation<Metadata>) -> NSView?)? = nil,
         onLineClick: ((DiffsLineEvent) -> Void)? = nil,
-        onLineSelected: ((SelectedLineRange?) -> Void)? = nil
+        onLineSelected: ((SelectedLineRange?) -> Void)? = nil,
+        edit: Bool = false,
+        editorOptions: DiffsEditorOptions = DiffsEditorOptions(),
+        editStateKey: String? = nil,
+        onEditChange: ((DiffsEditorChangeEvent) -> Void)? = nil,
+        onEditComplete: ((FileEditCompleteEvent<Metadata>) -> EditCompletionDecision)? = nil
     ) {
         self.file = file
         self.options = options
@@ -105,21 +170,65 @@ public struct DiffsFile<Metadata>: NSViewRepresentable {
         self.renderAnnotation = renderAnnotation
         self.onLineClick = onLineClick
         self.onLineSelected = onLineSelected
+        self.edit = edit
+        self.editorOptions = editorOptions
+        self.editStateKey = editStateKey
+        self.onEditChange = onEditChange
+        self.onEditComplete = onEditComplete
     }
+
+    @MainActor
+    public final class Coordinator {
+        var editor: DiffsEditor<LineAnnotation<Metadata>>?
+        var dispose: (() -> Void)?
+        /// The input an accepted edit replaced, and the accepted file.
+        var accepted: (input: FileContents, file: FileContents)?
+    }
+
+    public func makeCoordinator() -> Coordinator { Coordinator() }
 
     public func makeNSView(context: Context) -> FileView<Metadata> {
         FileView<Metadata>(options: options)
     }
 
     public func updateNSView(_ view: FileView<Metadata>, context: Context) {
+        let coordinator = context.coordinator
         view.renderAnnotation = renderAnnotation
         view.onLineClick = onLineClick
         view.onLineSelected = onLineSelected
+        view.onEditComplete = { event in
+            let decision = onEditComplete?(event) ?? .reject
+            if decision == .accept { coordinator.accepted = (event.originalFile, event.file) }
+            return decision
+        }
         view.options = options
-        view.render(file: file, lineAnnotations: annotations)
+        if !edit, let dispose = coordinator.dispose {
+            coordinator.dispose = nil
+            dispose()
+        }
+        // Keep an accepted edit until the owner passes a different file.
+        var resolved = file
+        if let accepted = coordinator.accepted {
+            if accepted.input == file { resolved = accepted.file } else { coordinator.accepted = nil }
+        }
+        if coordinator.dispose == nil {
+            view.render(file: resolved, lineAnnotations: annotations)
+        }
         if view.selectedLines != selectedLines {
             view.setSelectedLines(selectedLines)
         }
+        if edit, coordinator.dispose == nil {
+            let editor = DiffsEditor<LineAnnotation<Metadata>>(options: editorOptions, editStateKey: editStateKey)
+            editor.onChange = onEditChange
+            coordinator.editor = editor
+            coordinator.dispose = editor.edit(view)
+        } else {
+            coordinator.editor?.onChange = onEditChange
+        }
+    }
+
+    public static func dismantleNSView(_ view: FileView<Metadata>, coordinator: Coordinator) {
+        coordinator.editor?.cleanUp(.discard)
     }
 
     public func sizeThatFits(_ proposal: ProposedViewSize, nsView: FileView<Metadata>, context: Context) -> CGSize? {

@@ -249,7 +249,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             disableLineNumbers: options.code.disableLineNumbers,
             hunkSeparators: options.hunkSeparators,
             lineHoverHighlight: options.code.lineHoverHighlight,
-            enableGutterUtility: options.code.enableGutterUtility || onGutterUtilityClick != nil,
+            enableGutterUtility: options.code.enableGutterUtility || onGutterUtilityClick != nil || renderGutterUtility != nil,
             enableLineSelection: options.code.enableLineSelection,
             enableTokenInteractionsOnWhitespace: options.code.enableTokenInteractionsOnWhitespace,
             hasHeader: showsHeader

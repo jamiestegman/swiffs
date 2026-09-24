@@ -27,6 +27,12 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
     /// Called when the view's preferred height changes.
     public var onHeightChange: ((CGFloat) -> Void)?
 
+    /// Replaces the default gutter utility button with a custom view
+    /// (`renderGutterUtility`); the grid keeps handling its clicks.
+    public var renderGutterUtility: (() -> NSView?)? {
+        didSet { grid.setCustomUtilityView(renderGutterUtility?()) }
+    }
+
     override init(frame frameRect: NSRect) {
         let selection = DiffsCodeOptions().theme
         let theme = (try? ResolvedDiffsTheme.resolve(selection)) ?? DiffsDocumentView.fallbackTheme

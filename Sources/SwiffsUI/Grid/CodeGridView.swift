@@ -83,6 +83,7 @@ final class CodeGridView: NSView {
     private var hoveredToken: DiffsTokenEvent?
     private var hoveredExpand: GridHit?
     private var hoveredMergeAction: GridHit?
+    private var customUtilityContainer: NSView?
     /// Native text selection (see `CodeGridView+TextSelection.swift`).
     var textSelection: GridTextSelection?
     /// Editor state (see `CodeGridView+Editing.swift`).
@@ -961,7 +962,33 @@ final class CodeGridView: NSView {
         return (target.row, target.column, CGRect(x: maxX - lineHeight, y: rowTops[target.row], width: lineHeight, height: lineHeight))
     }
 
+    /// A custom gutter utility (`renderGutterUtility`); clicks pass through
+    /// to the grid so selection dragging keeps working.
+    func setCustomUtilityView(_ view: NSView?) {
+        customUtilityContainer?.removeFromSuperview()
+        customUtilityContainer = nil
+        guard let view else { return }
+        let container = PassthroughView()
+        container.addSubview(view)
+        view.autoresizingMask = [.width, .height]
+        addSubview(container)
+        customUtilityContainer = container
+        layoutCustomUtility()
+    }
+
+    func layoutCustomUtility() {
+        guard let container = customUtilityContainer else { return }
+        if let utility = utilityButtonRect() {
+            container.frame = utility.rect
+            container.subviews.first?.frame = container.bounds
+            container.isHidden = false
+        } else {
+            container.isHidden = true
+        }
+    }
+
     private func drawUtilityButton(_ rect: CGRect, context: CGContext) {
+        guard customUtilityContainer == nil else { return }
         let palette = style.palette
         context.setFillColor(style.cgColor(palette.modifiedBase))
         context.addPath(CGPath(roundedRect: rect, cornerWidth: 4, cornerHeight: 4, transform: nil))
@@ -1072,6 +1099,7 @@ final class CodeGridView: NSView {
             hoveredColumn = nil
             hoveredExpand = nil
             hoveredMergeAction = nil
+            layoutCustomUtility()
             needsDisplay = true
         }
         NSCursor.arrow.set()
@@ -1135,6 +1163,7 @@ final class CodeGridView: NSView {
             hoveredNumberColumn = numberColumn
             hoveredExpand = newExpand
             hoveredMergeAction = newMergeAction
+            layoutCustomUtility()
             needsDisplay = true
         }
         updateCursor(hit: hit)
@@ -1416,6 +1445,7 @@ final class CodeGridView: NSView {
     }
 
     private func updateSelection(to point: SelectionPoint?, emitChange: Bool) {
+        defer { layoutCustomUtility() }
         let previous = currentSelectionRange
         var next: SelectedLineRange?
         if let point {
@@ -1543,4 +1573,10 @@ final class CodeGridView: NSView {
         }
         return nil
     }
+}
+
+/// A view that never receives mouse events.
+final class PassthroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override var isFlipped: Bool { true }
 }

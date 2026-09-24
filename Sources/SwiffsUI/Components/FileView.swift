@@ -154,7 +154,7 @@ public final class FileView<Metadata>: DiffsDocumentView {
             disableLineNumbers: options.disableLineNumbers,
             hunkSeparators: .lineInfo,
             lineHoverHighlight: options.lineHoverHighlight,
-            enableGutterUtility: options.enableGutterUtility || onGutterUtilityClick != nil,
+            enableGutterUtility: options.enableGutterUtility || onGutterUtilityClick != nil || renderGutterUtility != nil,
             enableLineSelection: options.enableLineSelection,
             enableTokenInteractionsOnWhitespace: options.enableTokenInteractionsOnWhitespace,
             hasHeader: showsHeader

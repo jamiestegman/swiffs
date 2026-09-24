@@ -70,5 +70,6 @@ let package = Package(
         .testTarget(name: "SwiffsHighlightTests", dependencies: ["SwiffsHighlight"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsCoreTests", dependencies: ["SwiffsCore"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsEditorTests", dependencies: ["SwiffsEditor"], exclude: ["Fixtures"]),
+        .testTarget(name: "SwiffsUITests", dependencies: ["SwiffsCore", "SwiffsEditor", "SwiffsUI"]),
     ]
 )

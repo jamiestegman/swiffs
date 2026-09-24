@@ -722,13 +722,25 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         applyChange(result.change, next, annotations: annotations)
     }
 
-    private func replaceSelectionText(_ text: [String], undoBoundary: Bool = false, documentOrder: Bool = false) {
+    /// Text for `#replaceSelectionText`: one string applied at the primary
+    /// selection (and mirrored to the others), or one string per selection.
+    private enum ReplacementText {
+        case single(String)
+        case perSelection([String])
+    }
+
+    private func replaceSelectionText(_ text: ReplacementText, undoBoundary: Bool = false, documentOrder: Bool = false) {
         guard let document, let primary = selections.last else { return }
         let result: AnnotatedSelectionEditResult<Annotation>?
-        if text.count == selections.count, text.count > 1 || documentOrder {
-            result = try? applyTextReplaceToSelections(document, selections, text, lineAnnotations: lineAnnotations, undoBoundary: undoBoundary, documentOrder: documentOrder)
+        if case .perSelection(let texts) = text, texts.count == selections.count {
+            result = try? applyTextReplaceToSelections(document, selections, texts, lineAnnotations: lineAnnotations, undoBoundary: undoBoundary, documentOrder: documentOrder)
         } else {
-            let edit = ResolvedTextEdit(start: document.offsetAt(primary.start), end: document.offsetAt(primary.end), text: text.joined(separator: document.eol.rawValue))
+            let joined: String
+            switch text {
+            case .single(let value): joined = value
+            case .perSelection(let values): joined = values.joined(separator: document.eol.rawValue)
+            }
+            let edit = ResolvedTextEdit(start: document.offsetAt(primary.start), end: document.offsetAt(primary.end), text: joined)
             result = try? applyTextChangeToSelections(document, selections, edit, lineAnnotations: lineAnnotations, tabSize: tabSize, undoBoundary: undoBoundary)
         }
         guard let result, let change = result.change else { return }
@@ -1179,8 +1191,11 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         guard let document else { return }
         markedText = nil
         let normalized = text.utf16.count == 1 ? text : text
-        let surround = getAutoSurroundReplacementTexts(document, selections, normalized, autoSurround: options.autoSurround)
-        replaceSelectionText(surround ?? [normalized])
+        if let surround = getAutoSurroundReplacementTexts(document, selections, normalized, autoSurround: options.autoSurround) {
+            replaceSelectionText(.perSelection(surround))
+        } else {
+            replaceSelectionText(.single(normalized))
+        }
     }
 
     func editorSetMarkedText(_ text: String, selectedRange: NSRange) {
@@ -1205,7 +1220,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         guard let document else { return false }
         switch selector {
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertLineBreak(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
-            replaceSelectionText([document.eol.rawValue])
+            replaceSelectionText(.single(document.eol.rawValue))
         case #selector(NSResponder.insertTab(_:)):
             runCommand(.indent)
         case #selector(NSResponder.insertBacktab(_:)):
@@ -1423,7 +1438,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
                 guard let self, let document = self.document else { return "" }
                 return getSelectionText(document, self.selections)
             },
-            replaceSelectionText: { [weak self] text in self?.replaceSelectionText([text]) },
+            replaceSelectionText: { [weak self] text in self?.replaceSelectionText(.single(text)) },
             applyEdits: { [weak self] edits in try? self?.applyEdits(edits) },
             close: { [weak self] in self?.closeSelectionAction() }
         )
@@ -1474,9 +1489,9 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
             if selections.count > 1, let data = pasteboard.data(forType: Self.multiSelectionType),
                let texts = try? JSONDecoder().decode([String].self, from: data), texts.count == selections.count
             {
-                replaceSelectionText(texts.map(document.normalizeEol), undoBoundary: true, documentOrder: true)
+                replaceSelectionText(.perSelection(texts.map(document.normalizeEol)), undoBoundary: true, documentOrder: true)
             } else {
-                replaceSelectionText([document.normalizeEol(text)], undoBoundary: true, documentOrder: false)
+                replaceSelectionText(.single(document.normalizeEol(text)), undoBoundary: true)
             }
         case .selectAll:
             runCommand(.selectAll)

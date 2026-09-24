@@ -265,12 +265,22 @@ final class CodeGridView: NSView {
         return max(style.ch * 4, column.contentWidth - contentPaddingStart - contentPaddingEnd)
     }
 
+    /// Line layouts kept at once; enough for several screens of wrapped
+    /// lines. Scrolling through large files rebuilds evicted layouts.
+    private static let maxCachedLayouts = 4096
+
     func layout(for line: RenderedLine, column: ColumnGeometry) -> LineLayout {
         let key = LineKey(side: line.side, lineIndex: line.lineIndex, dimmed: false)
         if let cached = lineLayouts[key] { return cached }
+        let layout = makeLayout(for: line, column: column)
+        if lineLayouts.count >= Self.maxCachedLayouts { lineLayouts.removeAll(keepingCapacity: true) }
+        lineLayouts[key] = layout
+        return layout
+    }
+
+    private func makeLayout(for line: RenderedLine, column: ColumnGeometry) -> LineLayout {
         let highlighted = lineProvider?.line(side: line.side, lineIndex: line.lineIndex) ?? HighlightedLine(text: "", tokens: [])
         let layout = LineLayout.make(highlighted, style: style, wrapWidth: wrapWidth(for: column))
-        lineLayouts[key] = layout
         if layout.width > maxTextWidth[column.cellIndex] ?? 0 {
             maxTextWidth[column.cellIndex] = layout.width
         }
@@ -301,12 +311,23 @@ final class CodeGridView: NSView {
 
     /// Lays out every line of a column to learn the scroll width. Called
     /// lazily when horizontal scrolling starts.
-    private func measureAllLineWidths() {
-        for row in model.rows {
-            for column in columns {
-                guard column.cellIndex < row.cells.count, case .line(let line)? = row.cells[column.cellIndex] else { continue }
-                _ = layout(for: line, column: column)
+    func measureAllLineWidths() {
+        let rows = model.rows
+        var start = 0
+        while start < rows.count {
+            let end = min(start + 512, rows.count)
+            autoreleasepool {
+                for row in rows[start ..< end] {
+                    for column in columns {
+                        guard column.cellIndex < row.cells.count, case .line(let line)? = row.cells[column.cellIndex] else { continue }
+                        // Only the widest line matters; do not keep every layout.
+                        if lineLayouts[LineKey(side: line.side, lineIndex: line.lineIndex, dimmed: false)] == nil {
+                            _ = makeLayout(for: line, column: column)
+                        }
+                    }
+                }
             }
+            start = end
         }
     }
 

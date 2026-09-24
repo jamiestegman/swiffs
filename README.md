@@ -43,6 +43,10 @@ view.onEditComplete = { event in
 let complete = editor.edit(view)
 ```
 
+Pass `editStateKey:` to keep a session's document, undo history, selections
+and diff hunks in `EditStateManager.shared` after it ends; a later editor
+with the same key resumes it.
+
 ## Parity
 
 The port is verified against the upstream TypeScript implementation with

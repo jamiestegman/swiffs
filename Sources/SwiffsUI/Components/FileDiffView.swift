@@ -596,6 +596,31 @@ extension FileDiffView: EditorHost {
         }
     }
 
+    var editorType: EditorType { .fileDiff }
+
+    func editorCaptureSessionState() -> (snapshot: RetainedDiffSessionSnapshot, hasChanges: Bool)? {
+        guard let diff = fileDiff, !diff.isPartial else { return nil }
+        let oldFile = diff.type != .new ? RetainedDiffSessionSnapshot.OldFile(name: diff.prevName ?? diff.name, lines: diff.deletionLines) : nil
+        return (RetainedDiffSessionSnapshot(oldFile: oldFile, type: diff.type, hunks: diff.hunks), diff.editSessionDirty == true)
+    }
+
+    /// `installEditSession` with a retained session (`canRestoreDiffSession`).
+    func editorRestoreSessionState(_ snapshot: RetainedDiffSessionSnapshot) -> Bool {
+        guard var diff = fileDiff, let source = editorSource else { return false }
+        if let oldFile = snapshot.oldFile {
+            guard diff.type != .new, oldFile.name == (diff.prevName ?? diff.name), oldFile.lines == diff.deletionLines else { return false }
+        } else if diff.type != .new {
+            return false
+        }
+        diff.additionLines = (0 ..< source.lineCount).map { source.lineTextWithBreak($0) }
+        diff.type = snapshot.type
+        diff.hunks = snapshot.hunks
+        diff.editSessionDirty = true
+        recomputeDiffRenderLineCounts(&diff)
+        setEditedDiff(diff)
+        return true
+    }
+
     /// Keeps the diff's new side and hunks in sync with the edited document
     /// (`updateRenderCache` / `applyDocumentChange`).
     func editorDocumentChanged(_ change: TextDocumentChange?) {

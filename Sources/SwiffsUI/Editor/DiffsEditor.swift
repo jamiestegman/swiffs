@@ -95,42 +95,9 @@ enum EditorDetachResult {
     case complete(text: String, annotations: [Any]?)
 }
 
-/// Retained edit state per key (`EditStateManager`): the document with its
-/// history and the selections, so re-attaching resumes the session.
-@MainActor
-public final class DiffsEditStateStore {
-    public static let shared = DiffsEditStateStore()
-
-    struct Entry {
-        var document: AnyObject
-        var selections: [EditorSelection]
-        var fileName: String
-    }
-
-    private var entries: [String: Entry] = [:]
-    private var order: [String] = []
-    public var capacity = 100
-
-    func take(_ key: String) -> Entry? {
-        guard let entry = entries.removeValue(forKey: key) else { return nil }
-        order.removeAll { $0 == key }
-        return entry
-    }
-
-    func store(_ key: String, _ entry: Entry) {
-        entries[key] = entry
-        order.removeAll { $0 == key }
-        order.append(key)
-        while order.count > capacity {
-            entries.removeValue(forKey: order.removeFirst())
-        }
-    }
-
-    /// Drops retained state for a key.
-    public func release(_ key: String) {
-        entries.removeValue(forKey: key)
-        order.removeAll { $0 == key }
-    }
+public enum DiffsEditorError: Error, Equatable {
+    /// The editor is not attached to a view.
+    case notAttached
 }
 
 /// Change notification (`EditorChangeEvent`).
@@ -164,6 +131,19 @@ protocol EditorHost: AnyObject {
     var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? { get }
     /// Rebuild rows after the document changed.
     func editorDocumentChanged(_ change: TextDocumentChange?)
+    var editorType: EditorType { get }
+    /// The current diff session (`__captureDocumentSessionState`); nil for
+    /// files and partial diffs.
+    func editorCaptureSessionState() -> (snapshot: RetainedDiffSessionSnapshot, hasChanges: Bool)?
+    /// Resumes a retained diff session against the attached document; false
+    /// when the snapshot belongs to a different old file.
+    func editorRestoreSessionState(_ snapshot: RetainedDiffSessionSnapshot) -> Bool
+}
+
+extension EditorHost {
+    var editorType: EditorType { .file }
+    func editorCaptureSessionState() -> (snapshot: RetainedDiffSessionSnapshot, hasChanges: Bool)? { nil }
+    func editorRestoreSessionState(_ snapshot: RetainedDiffSessionSnapshot) -> Bool { false }
 }
 
 /// Supplies the lines an attached editor renders.
@@ -232,9 +212,19 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     /// Observes completion events (`onComplete`).
     public var onComplete: ((Any) -> Void)?
 
-    public init(options: DiffsEditorOptions = DiffsEditorOptions(), editStateKey: String? = nil) {
+    /// The session this editor edits (`#editSession`).
+    private var editSession: DiffsEditState<Annotation>?
+    /// State supplied at construction, consumed by the first attach.
+    private var initialState: DiffsEditState<Annotation>?
+    /// Whether the session was worth retaining at its last checkpoint.
+    private var retainsDiffState = false
+
+    /// `initialState` resumes a session (transferred by reference), e.g. one
+    /// returned by `getEditState()` or `EditStateManager.get`.
+    public init(options: DiffsEditorOptions = DiffsEditorOptions(), editStateKey: String? = nil, initialState: DiffsEditState<Annotation>? = nil) {
         self.options = options
         self.editStateKey = editStateKey
+        self.initialState = initialState
         compiledKeymap = options.keymap.map(CompiledEditorKeymap.init)
     }
 
@@ -277,54 +267,122 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     }
 
     func attach(_ host: any EditorHost, annotations: [Annotation]?) {
-        cleanUp()
+        // Moving to another view ends the current session; a recycled session
+        // (no view) resumes below.
+        if self.host != nil { cleanUp() }
         guard let file = host.editorFile else { return }
-        self.host = host
-        fileInfo = FileContents(name: file.name, contents: "", lang: file.lang)
         let lang = file.lang ?? getFiletypeFromFileName(file.name)
-        var restoredSelections: [EditorSelection]?
-        let document: TextDocument<Annotation>
-        if let key = editStateKey, let entry = DiffsEditStateStore.shared.take(key), let retained = entry.document as? TextDocument<Annotation>, entry.fileName == file.name {
-            // Resume the retained document and history.
-            document = retained
-            restoredSelections = entry.selections
+        let session = editSessionFor(host)
+        editSession = session
+        // `#syncRenderView`: keep the session's document unless it belongs to
+        // a different file (unkeyed sessions only).
+        let reusesDocument: Bool
+        if let document = session.document, let info = session.fileInfo {
+            reusesDocument = editStateKey != nil || (info.name == file.name && document.languageId == lang)
         } else {
-            document = TextDocument<Annotation>(uri: file.name, text: file.contents, languageId: lang, editStack: EditStack(maxEntries: options.historyMaxEntries))
+            reusesDocument = false
         }
+        if !reusesDocument {
+            if session.document != nil { session.editor = nil }
+            session.document = TextDocument<Annotation>(uri: file.name, text: file.contents, languageId: lang, editStack: EditStack(maxEntries: options.historyMaxEntries))
+            session.fileInfo = (file.name, file.lang)
+            session.diffSession = nil
+        }
+        let document = session.document!
+        let info = session.fileInfo ?? (file.name, file.lang)
+        self.host = host
+        fileInfo = FileContents(name: info.name, contents: "", lang: info.lang)
         self.document = document
         lineAnnotations = annotations
         lineStore = (0 ..< document.lineCount).map { .original($0) }
         let highlighter = DiffsHighlighter()
-        try? highlighter.prepare(langs: [lang], themes: [host.editorTheme.name])
+        try? highlighter.prepare(langs: [document.languageId], themes: [host.editorTheme.name])
         self.highlighter = highlighter
         let tokenizer = EditorTokenizer(highlighter: highlighter, document: document, themeName: host.editorTheme.name, themeType: host.editorTheme.kind, matchBrackets: options.matchBrackets)
         tokenizer.onDeferTokenize = { [weak self] lines, _ in
             MainActor.assumeIsolated { self?.applyTokens(lines) }
         }
         self.tokenizer = tokenizer
-        let caret = Position(line: 0, character: 0)
-        selections = restoredSelections ?? [EditorSelection(caret: caret)]
+        let retainedView = session.editor
+        selections = [EditorSelection(caret: Position(line: 0, character: 0))]
         host.editorAttach(self)
-        if restoredSelections != nil {
+        let differs = document.getText() != file.contents
+        let restoredDiff = session.diffSession.map { host.editorRestoreSessionState($0) } ?? false
+        if differs || restoredDiff {
             // The retained document differs from the view's input.
             lineStore = (0 ..< document.lineCount).map { _ in .edited(nil) }
             applyTokens(tokenizer.tokenizeLines(0 ..< document.lineCount))
-            host.editorDocumentChanged(nil)
+            if !restoredDiff { host.editorDocumentChanged(nil) }
         }
         host.editorGrid.editorClient = self
         host.editorGrid.rebuildEditorLineRows()
         tokenizer.prebuildStateStack()
+        if let retainedView { applyViewState(retainedView) }
+        checkpointEditSessionState()
     }
 
-    /// Ends editing (`cleanUp(reason)`).
+    /// `getEditSession`: the keyed, initial, previous or a new session.
+    private func editSessionFor(_ host: any EditorHost) -> DiffsEditState<Annotation> {
+        let type = host.editorType
+        var initial = initialState
+        initialState = nil
+        if let state = initial, state.type != type {
+            assertionFailure("DiffsEditor: initialState: a \(state.type.rawValue) state cannot initialize a \(type.rawValue) editor")
+            initial = nil
+        }
+        if let key = editStateKey {
+            do {
+                return try EditStateManager.shared.activate(type, key, owner: self, initialState: initial)
+            } catch {
+                assertionFailure("DiffsEditor: editStateKey \"\(key)\" is already attached to another editor")
+                return DiffsEditState(type: type)
+            }
+        }
+        if let initial { return initial }
+        if let previous = editSession, previous.type == type { return previous }
+        return DiffsEditState(type: type)
+    }
+
+    /// Records view and diff state on the session; returns whether a keyed
+    /// diff is worth retaining after the session ends
+    /// (`#checkpointEditSessionState`).
+    @discardableResult
+    private func checkpointEditSessionState() -> Bool {
+        guard let host, let session = editSession else { return false }
+        let state = getViewState()
+        let hasNonDefaultView = state.view.map { $0.scrollLeft != 0 || ($0.scrollTop ?? 0) != 0 } ?? false
+        let hasEditorState = state.selections != nil || hasNonDefaultView
+        session.editor = state
+        guard session.type == .fileDiff else { return false }
+        let captured = host.editorCaptureSessionState()
+        session.diffSession = captured?.snapshot
+        guard let captured else {
+            retainsDiffState = false
+            return false
+        }
+        retainsDiffState = captured.hasChanges || hasEditorState || document?.canUndo == true || document?.canRedo == true
+        return retainsDiffState
+    }
+
+    private func releaseEditSession(discardDiffState: Bool) {
+        guard let key = editStateKey, let session = editSession else { return }
+        EditStateManager.shared.release(session.type, key, owner: self, discard: session.type == .fileDiff && discardDiffState)
+    }
+
+    /// Ends editing (`cleanUp(reason)`). `.recycle` detaches from the view but
+    /// keeps the session for the next `edit`.
     public func cleanUp(_ reason: DiffsEditorCleanupReason = .discard) {
+        let recycle = reason == .recycle
+        if host != nil, editSession != nil {
+            let worthRetaining = checkpointEditSessionState()
+            if !recycle { releaseEditSession(discardDiffState: !worthRetaining) }
+        } else if !recycle, editSession != nil {
+            // A recycled session ends without a view.
+            releaseEditSession(discardDiffState: !retainsDiffState)
+        }
+        if !recycle { editSession = nil }
         tokenizer?.cleanUp()
         tokenizer = nil
-        if let key = editStateKey, let document, reason != .complete {
-            DiffsEditStateStore.shared.store(key, .init(document: document, selections: selections, fileName: fileInfo.name))
-        } else if let key = editStateKey {
-            DiffsEditStateStore.shared.release(key)
-        }
         if let host {
             host.editorGrid.editorClient = nil
             switch reason {
@@ -346,8 +404,44 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         removeMarkerPopover()
         closeSelectionAction()
         cancelPrediction()
-        predictionHistory = []
+        if !recycle { predictionHistory = [] }
         carets = []
+    }
+
+    // MARK: - View and edit state
+
+    /// A copy of the selections and restorable view state (`getViewState`).
+    public func getViewState() -> EditorViewState {
+        guard let host else { return editSession?.editor ?? EditorViewState() }
+        return EditorViewState(selections: selections, view: EditorViewportState(scrollLeft: host.editorGrid.scrollX))
+    }
+
+    /// Restores selections and scroll offsets (`setViewState`).
+    public func setViewState(_ state: EditorViewState) throws {
+        guard host != nil, document != nil else { throw DiffsEditorError.notAttached }
+        applyViewState(state)
+        checkpointEditSessionState()
+    }
+
+    private func applyViewState(_ state: EditorViewState) {
+        guard let host, let document else { return }
+        canMountSelectionAction = false
+        updateSelections((state.selections ?? []).map { selection in
+            EditorSelection(start: document.normalizePosition(selection.start), end: document.normalizePosition(selection.end), direction: selection.direction)
+        })
+        if let view = state.view {
+            host.editorGrid.setScrollX(view.scrollLeft)
+        } else {
+            host.editorGrid.scrollEditorCaretToVisible()
+        }
+    }
+
+    /// The objects that make up the active session, or nil when no complete
+    /// session exists (`getEditState`).
+    public func getEditState() -> DiffsEditState<Annotation>? {
+        guard let session = editSession else { return nil }
+        if host != nil { checkpointEditSessionState() }
+        return toManagedEditState(session)
     }
 
     // MARK: - Public API

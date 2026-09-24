@@ -81,6 +81,10 @@ struct Case: Decodable {
     var prediction: [String]?
     /// Accept completed edit sessions.
     var acceptEdits: Bool?
+    /// A patch rendered as a partial diff whose files load from
+    /// `oldFile`/`newFile`; `expand` hunks are expanded after rendering.
+    var patch: String?
+    var expand: [Int]?
 
     struct EditAction: Decodable {
         var type: String
@@ -122,6 +126,23 @@ func run() throws {
 
     let view: NSView
     let preferredHeight: (CGFloat) -> CGFloat
+    if let patch = testCase.patch, let oldFile = testCase.oldFile, let newFile = testCase.newFile {
+        let diffView = FileDiffView<Void>(options: options)
+        diffView.appearance = appearance
+        diffView.synchronousHighlightLineLimit = .max
+        diffView.loadDiffFiles = { _ in DiffLoadedFiles(oldFile: oldFile, newFile: newFile) }
+        try diffView.render(patch: patch)
+        for hunk in testCase.expand ?? [] {
+            diffView.expandHunk(hunk, direction: .both)
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while diffView.fileDiff?.isPartial == true, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        print("partial: \(diffView.fileDiff?.isPartial ?? true)")
+        view = diffView
+        preferredHeight = diffView.preferredHeight(forWidth:)
+    } else
     if testCase.kind == "edit", let file = testCase.file {
         let documentView: DiffsDocumentView
         let getText: () -> String

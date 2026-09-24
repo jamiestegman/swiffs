@@ -165,8 +165,32 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             region.fromEnd = add(region.fromEnd, count)
         }
         expandedHunks[hunkIndex] = region
+        loadFilesIfNecessary()
         rebuildRows()
         onHunkExpand?(hunkIndex, direction)
+    }
+
+    /// Loads the full files for a partial diff so collapsed context can
+    /// expand (`loadDiffFiles`).
+    public var loadDiffFiles: ((FileDiffMetadata) async throws -> DiffLoadedFiles)? {
+        didSet { rebuildRows() }
+    }
+
+    private var pendingFileLoad: FileDiffMetadata?
+
+    /// `loadFilesIfNecessary`.
+    private func loadFilesIfNecessary() {
+        guard let fileDiff, let loadDiffFiles, canHydrateDiff(fileDiff), pendingFileLoad != fileDiff else { return }
+        pendingFileLoad = fileDiff
+        Task { [weak self] in
+            let files = try? await loadDiffFiles(fileDiff)
+            guard let self else { return }
+            if self.pendingFileLoad == fileDiff { self.pendingFileLoad = nil }
+            guard let files, self.fileDiff == fileDiff, let hydrated = try? hydratePartialDiff(fileDiff, files: files) else { return }
+            // Keep the expansion state across hydration.
+            let expanded = self.expandedHunks
+            self.render(fileDiff: hydrated, expandedHunks: expanded)
+        }
     }
 
     public func expandedRegion(for hunkIndex: Int) -> HunkExpansionRegion {
@@ -249,7 +273,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             return
         }
         var rowOptions = effectiveOptions.rowsOptions
-        rowOptions.canLoadDiffFiles = false
+        rowOptions.canLoadDiffFiles = loadDiffFiles != nil
         do {
             rowsResult = try buildDiffRows(
                 fileDiff: fileDiff,

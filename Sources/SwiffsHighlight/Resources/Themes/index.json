@@ -1,0 +1,377 @@
+[
+ {
+  "id": "pierre-light",
+  "displayName": "Pierre Light",
+  "type": "light"
+ },
+ {
+  "id": "pierre-light-vibrant",
+  "displayName": "Pierre Light Vibrant",
+  "type": "light"
+ },
+ {
+  "id": "pierre-light-tritanopia",
+  "displayName": "Pierre Light Tritanopia",
+  "type": "light"
+ },
+ {
+  "id": "pierre-light-soft",
+  "displayName": "Pierre Light Soft",
+  "type": "light"
+ },
+ {
+  "id": "pierre-light-protanopia-deuteranopia",
+  "displayName": "Pierre Light Protanopia & Deuteranopia",
+  "type": "light"
+ },
+ {
+  "id": "pierre-dark",
+  "displayName": "Pierre Dark",
+  "type": "dark"
+ },
+ {
+  "id": "pierre-dark-vibrant",
+  "displayName": "Pierre Dark Vibrant",
+  "type": "dark"
+ },
+ {
+  "id": "pierre-dark-tritanopia",
+  "displayName": "Pierre Dark Tritanopia",
+  "type": "dark"
+ },
+ {
+  "id": "pierre-dark-soft",
+  "displayName": "Pierre Dark Soft",
+  "type": "dark"
+ },
+ {
+  "id": "pierre-dark-protanopia-deuteranopia",
+  "displayName": "Pierre Dark Protanopia & Deuteranopia",
+  "type": "dark"
+ },
+ {
+  "id": "andromeeda",
+  "displayName": "Andromeeda",
+  "type": "dark"
+ },
+ {
+  "id": "aurora-x",
+  "displayName": "Aurora X",
+  "type": "dark"
+ },
+ {
+  "id": "ayu-dark",
+  "displayName": "Ayu Dark",
+  "type": "dark"
+ },
+ {
+  "id": "ayu-light",
+  "displayName": "Ayu Light",
+  "type": "light"
+ },
+ {
+  "id": "ayu-mirage",
+  "displayName": "Ayu Mirage",
+  "type": "dark"
+ },
+ {
+  "id": "catppuccin-frappe",
+  "displayName": "Catppuccin Frappé",
+  "type": "dark"
+ },
+ {
+  "id": "catppuccin-latte",
+  "displayName": "Catppuccin Latte",
+  "type": "light"
+ },
+ {
+  "id": "catppuccin-macchiato",
+  "displayName": "Catppuccin Macchiato",
+  "type": "dark"
+ },
+ {
+  "id": "catppuccin-mocha",
+  "displayName": "Catppuccin Mocha",
+  "type": "dark"
+ },
+ {
+  "id": "dark-plus",
+  "displayName": "Dark Plus",
+  "type": "dark"
+ },
+ {
+  "id": "dracula",
+  "displayName": "Dracula Theme",
+  "type": "dark"
+ },
+ {
+  "id": "dracula-soft",
+  "displayName": "Dracula Theme Soft",
+  "type": "dark"
+ },
+ {
+  "id": "everforest-dark",
+  "displayName": "Everforest Dark",
+  "type": "dark"
+ },
+ {
+  "id": "everforest-light",
+  "displayName": "Everforest Light",
+  "type": "light"
+ },
+ {
+  "id": "github-dark",
+  "displayName": "GitHub Dark",
+  "type": "dark"
+ },
+ {
+  "id": "github-dark-default",
+  "displayName": "GitHub Dark Default",
+  "type": "dark"
+ },
+ {
+  "id": "github-dark-dimmed",
+  "displayName": "GitHub Dark Dimmed",
+  "type": "dark"
+ },
+ {
+  "id": "github-dark-high-contrast",
+  "displayName": "GitHub Dark High Contrast",
+  "type": "dark"
+ },
+ {
+  "id": "github-light",
+  "displayName": "GitHub Light",
+  "type": "light"
+ },
+ {
+  "id": "github-light-default",
+  "displayName": "GitHub Light Default",
+  "type": "light"
+ },
+ {
+  "id": "github-light-high-contrast",
+  "displayName": "GitHub Light High Contrast",
+  "type": "light"
+ },
+ {
+  "id": "gruvbox-dark-hard",
+  "displayName": "Gruvbox Dark Hard",
+  "type": "dark"
+ },
+ {
+  "id": "gruvbox-dark-medium",
+  "displayName": "Gruvbox Dark Medium",
+  "type": "dark"
+ },
+ {
+  "id": "gruvbox-dark-soft",
+  "displayName": "Gruvbox Dark Soft",
+  "type": "dark"
+ },
+ {
+  "id": "gruvbox-light-hard",
+  "displayName": "Gruvbox Light Hard",
+  "type": "light"
+ },
+ {
+  "id": "gruvbox-light-medium",
+  "displayName": "Gruvbox Light Medium",
+  "type": "light"
+ },
+ {
+  "id": "gruvbox-light-soft",
+  "displayName": "Gruvbox Light Soft",
+  "type": "light"
+ },
+ {
+  "id": "horizon",
+  "displayName": "Horizon",
+  "type": "dark"
+ },
+ {
+  "id": "horizon-bright",
+  "displayName": "Horizon Bright",
+  "type": "light"
+ },
+ {
+  "id": "houston",
+  "displayName": "Houston",
+  "type": "dark"
+ },
+ {
+  "id": "kanagawa-dragon",
+  "displayName": "Kanagawa Dragon",
+  "type": "dark"
+ },
+ {
+  "id": "kanagawa-lotus",
+  "displayName": "Kanagawa Lotus",
+  "type": "light"
+ },
+ {
+  "id": "kanagawa-wave",
+  "displayName": "Kanagawa Wave",
+  "type": "dark"
+ },
+ {
+  "id": "laserwave",
+  "displayName": "LaserWave",
+  "type": "dark"
+ },
+ {
+  "id": "light-plus",
+  "displayName": "Light Plus",
+  "type": "light"
+ },
+ {
+  "id": "material-theme",
+  "displayName": "Material Theme",
+  "type": "dark"
+ },
+ {
+  "id": "material-theme-darker",
+  "displayName": "Material Theme Darker",
+  "type": "dark"
+ },
+ {
+  "id": "material-theme-lighter",
+  "displayName": "Material Theme Lighter",
+  "type": "light"
+ },
+ {
+  "id": "material-theme-ocean",
+  "displayName": "Material Theme Ocean",
+  "type": "dark"
+ },
+ {
+  "id": "material-theme-palenight",
+  "displayName": "Material Theme Palenight",
+  "type": "dark"
+ },
+ {
+  "id": "min-dark",
+  "displayName": "Min Dark",
+  "type": "dark"
+ },
+ {
+  "id": "min-light",
+  "displayName": "Min Light",
+  "type": "light"
+ },
+ {
+  "id": "monokai",
+  "displayName": "Monokai",
+  "type": "dark"
+ },
+ {
+  "id": "night-owl",
+  "displayName": "Night Owl",
+  "type": "dark"
+ },
+ {
+  "id": "night-owl-light",
+  "displayName": "Night Owl Light",
+  "type": "light"
+ },
+ {
+  "id": "nord",
+  "displayName": "Nord",
+  "type": "dark"
+ },
+ {
+  "id": "one-dark-pro",
+  "displayName": "One Dark Pro",
+  "type": "dark"
+ },
+ {
+  "id": "one-light",
+  "displayName": "One Light",
+  "type": "light"
+ },
+ {
+  "id": "plastic",
+  "displayName": "Plastic",
+  "type": "dark"
+ },
+ {
+  "id": "poimandres",
+  "displayName": "Poimandres",
+  "type": "dark"
+ },
+ {
+  "id": "red",
+  "displayName": "Red",
+  "type": "dark"
+ },
+ {
+  "id": "rose-pine",
+  "displayName": "Rosé Pine",
+  "type": "dark"
+ },
+ {
+  "id": "rose-pine-dawn",
+  "displayName": "Rosé Pine Dawn",
+  "type": "light"
+ },
+ {
+  "id": "rose-pine-moon",
+  "displayName": "Rosé Pine Moon",
+  "type": "dark"
+ },
+ {
+  "id": "slack-dark",
+  "displayName": "Slack Dark",
+  "type": "dark"
+ },
+ {
+  "id": "slack-ochin",
+  "displayName": "Slack Ochin",
+  "type": "light"
+ },
+ {
+  "id": "snazzy-light",
+  "displayName": "Snazzy Light",
+  "type": "light"
+ },
+ {
+  "id": "solarized-dark",
+  "displayName": "Solarized Dark",
+  "type": "dark"
+ },
+ {
+  "id": "solarized-light",
+  "displayName": "Solarized Light",
+  "type": "light"
+ },
+ {
+  "id": "synthwave-84",
+  "displayName": "Synthwave '84",
+  "type": "dark"
+ },
+ {
+  "id": "tokyo-night",
+  "displayName": "Tokyo Night",
+  "type": "dark"
+ },
+ {
+  "id": "vesper",
+  "displayName": "Vesper",
+  "type": "dark"
+ },
+ {
+  "id": "vitesse-black",
+  "displayName": "Vitesse Black",
+  "type": "dark"
+ },
+ {
+  "id": "vitesse-dark",
+  "displayName": "Vitesse Dark",
+  "type": "dark"
+ },
+ {
+  "id": "vitesse-light",
+  "displayName": "Vitesse Light",
+  "type": "light"
+ }
+]

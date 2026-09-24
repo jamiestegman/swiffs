@@ -10,6 +10,8 @@ Swiffs is structured like a native library with a UI-free core
 | Module       | Contents                                                              |
 | ------------ | --------------------------------------------------------------------- |
 | `SwiffsCore` | Diff data model, patch parsing, jsdiff port (Myers), hunk utilities.  |
+| `SwiffsHighlight` | Shiki port: TextMate tokenizer (vscode-textmate) on vendored Oniguruma, 242 bundled grammars, 75 themes. |
+| `COniguruma` | Vendored Oniguruma 6.9.10 regex engine.                               |
 
 ## Parity
 

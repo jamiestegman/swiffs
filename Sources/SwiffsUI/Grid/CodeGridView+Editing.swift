@@ -46,6 +46,8 @@ protocol GridEditorClient: AnyObject {
     var editorGhostText: [(position: Position, text: String)] { get }
     var editorBracketMatchColor: CGColor? { get }
     var editorMarkedText: (text: String, range: DocumentRange)? { get }
+    /// `roundedSelection`.
+    var editorRoundedSelection: Bool { get }
     var editorText: String { get }
     /// UTF-16 offset of a document position.
     func editorOffset(of position: Position) -> Int
@@ -261,14 +263,88 @@ extension CodeGridView {
         let selectionColor = client.editorSelectionColor ?? (editing.isFocused ? NSColor.selectedTextBackgroundColor : NSColor.unemphasizedSelectedTextBackgroundColor).cgColor
         context.setFillColor(selectionColor)
         for selection in client.editorSelections where !selection.isCollapsed {
-            let rects = editorRangeRects(selection.range, line: line, row: row, column: column, extendsPastLineEnd: true)
-            for rect in rects {
-                let path = CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil)
-                context.addPath(path)
-                context.fillPath()
+            let rects = editorRangeRects(selection.range, line: line, row: row, column: column, extendsPastLineEnd: true).filter { $0.width > 0 }
+            guard client.editorRoundedSelection else {
+                context.fill(rects)
+                continue
+            }
+            let previous = selectionBlocks(selection.range, docLine: line.lineIndex - 1).last
+            let next = selectionBlocks(selection.range, docLine: line.lineIndex + 1).first
+            for (index, rect) in rects.enumerated() {
+                let before = index > 0 ? rects[index - 1] : previous
+                let after = index + 1 < rects.count ? rects[index + 1] : next
+                drawRoundedSelectionBlock(rect, previous: before, next: after, context: context)
             }
         }
         context.restoreGState()
+    }
+
+    /// Selection blocks (one per visual line) of a document line.
+    private func selectionBlocks(_ range: DocumentRange, docLine: Int) -> [CGRect] {
+        guard docLine >= range.start.line, docLine <= range.end.line, let location = editorLocation(ofLine: docLine),
+              let line = textLine(row: location.row, column: location.column)
+        else { return [] }
+        return editorRangeRects(range, line: line, row: location.row, column: location.column, extendsPastLineEnd: true).filter { $0.width > 0 }
+    }
+
+    /// Draws a selection block with upstream's `roundedSelection` corners: the
+    /// free corners are rounded, corners joined to the neighboring visual
+    /// lines are square, and steps between them get concave fillets
+    /// (`#renderSelectionBlock` / `addRadiusStyle`).
+    private func drawRoundedSelectionBlock(_ block: CGRect, previous: CGRect?, next: CGRect?, context: CGContext) {
+        let radius: CGFloat = 3
+        // A block joins the one above unless it ends before that one starts.
+        func joins(_ lower: CGRect, below upper: CGRect) -> Bool { lower.maxX > upper.minX }
+        var topLeft = true, topRight = true, bottomLeft = true, bottomRight = true
+        if let previous, joins(block, below: previous) {
+            topLeft = block.minX < previous.minX
+            topRight = block.maxX > previous.maxX
+        }
+        if let next, joins(next, below: block) {
+            bottomLeft = false
+            if next.maxX >= block.maxX { bottomRight = false }
+        }
+        context.addPath(roundedRectPath(block, radius: radius, topLeft: topLeft, topRight: topRight, bottomLeft: bottomLeft, bottomRight: bottomRight))
+        context.fillPath()
+        // Fillets on this block's bottom edge (toward the next block) and top
+        // edge (from the previous block).
+        if let next, joins(next, below: block) {
+            if block.minX > next.minX { fillet(CGPoint(x: block.minX, y: block.maxY), dx: -1, dy: -1, radius: radius, context: context) }
+            if next.maxX > block.maxX { fillet(CGPoint(x: block.maxX, y: block.maxY), dx: 1, dy: -1, radius: radius, context: context) }
+        }
+        if let previous, joins(block, below: previous), block.maxX < previous.maxX {
+            fillet(CGPoint(x: block.maxX, y: block.minY), dx: 1, dy: 1, radius: radius, context: context)
+        }
+    }
+
+    private func roundedRectPath(_ rect: CGRect, radius: CGFloat, topLeft: Bool, topRight: Bool, bottomLeft: Bool, bottomRight: Bool) -> CGPath {
+        let r = min(radius, rect.width / 2, rect.height / 2)
+        let path = CGMutablePath()
+        // Flipped coordinates: minY is the top.
+        path.move(to: CGPoint(x: rect.minX + (topLeft ? r : 0), y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - (topRight ? r : 0), y: rect.minY))
+        if topRight { path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY + r), radius: r) }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - (bottomRight ? r : 0)))
+        if bottomRight { path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.maxX - r, y: rect.maxY), radius: r) }
+        path.addLine(to: CGPoint(x: rect.minX + (bottomLeft ? r : 0), y: rect.maxY))
+        if bottomLeft { path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.maxY - r), radius: r) }
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + (topLeft ? r : 0)))
+        if topLeft { path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.minX + r, y: rect.minY), radius: r) }
+        path.closeSubpath()
+        return path
+    }
+
+    /// A concave corner at `corner`, filling the square that extends by
+    /// (`dx`, `dy`) outside a quarter circle (upstream's masked corner
+    /// element).
+    private func fillet(_ corner: CGPoint, dx: CGFloat, dy: CGFloat, radius: CGFloat, context: CGContext) {
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: corner.x, y: corner.y + dy * radius))
+        path.addArc(tangent1End: corner, tangent2End: CGPoint(x: corner.x + dx * radius, y: corner.y), radius: radius)
+        path.addLine(to: corner)
+        path.closeSubpath()
+        context.addPath(path)
+        context.fillPath()
     }
 
     /// Draws carets and IME marked text underline over a line.

@@ -14,6 +14,8 @@ public struct DiffsEditorOptions {
     public var keymap: EditorKeymap?
     /// Highlight the bracket pair next to the caret.
     public var matchBrackets = true
+    /// Round the corners of selection ranges.
+    public var roundedSelection = true
     public var autoSurround: AutoSurround = .default
     public var languageCommentConfig: [String: LanguageConfig]?
     /// Inline edit prediction (`editPrediction`).
@@ -235,6 +237,9 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
             cancelPrediction()
             predictionHistory = []
             if document != nil { schedulePrediction() }
+        }
+        if previous.roundedSelection != options.roundedSelection {
+            host?.editorGrid.needsDisplay = true
         }
         if previous.matchBrackets != options.matchBrackets {
             updateBracketMatch()
@@ -1218,6 +1223,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     var editorSide: AnnotationSide { .additions }
     var editorSelections: [EditorSelection] { selections }
     var editorMarkedText: (text: String, range: DocumentRange)? { markedText }
+    var editorRoundedSelection: Bool { options.roundedSelection }
 
     var editorText: String { document?.getText() ?? "" }
     func editorOffset(of position: Position) -> Int { document?.offsetAt(position) ?? 0 }

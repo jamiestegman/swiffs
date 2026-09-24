@@ -52,6 +52,9 @@ public struct DiffsCodeOptions: Equatable, @unchecked Sendable {
     public var tokenizeMaxLength = DiffsConstants.defaultTokenizeMaxLength
     public var typography = DiffsTypography()
     public var colorOverrides = DiffsColorOverrides()
+    /// Leave render errors to `onRenderError` instead of showing them in the
+    /// view (`disableErrorHandling`).
+    public var disableErrorHandling = false
 
     // Interaction (InteractionManagerBaseOptions)
     public var lineHoverHighlight: LineHoverHighlight = .disabled

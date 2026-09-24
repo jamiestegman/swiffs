@@ -120,11 +120,42 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
     var showsHeader: Bool { !codeOptions.disableFileHeader }
     var showsCode: Bool { !codeOptions.collapsed }
 
+    // MARK: Render errors
+
+    /// Receives render and file-loading errors (upstream logs them with
+    /// `console.error`).
+    public var onRenderError: ((Error) -> Void)?
+    private var errorView: RenderErrorView?
+    private var currentRenderError: String?
+
+    /// Shows a render error in place of the code (`applyErrorToDOM`), or
+    /// clears it when `error` is nil.
+    func reportRenderError(_ error: Error?) {
+        // Rows rebuild several times per render; report each failure once.
+        let description = error.map { String(reflecting: $0) }
+        if let error, description != currentRenderError { onRenderError?(error) }
+        currentRenderError = description
+        guard let error, !codeOptions.disableErrorHandling else {
+            if errorView != nil {
+                errorView?.removeFromSuperview()
+                errorView = nil
+                gridContentChanged()
+            }
+            return
+        }
+        let view = errorView ?? RenderErrorView()
+        view.show(error, style: style)
+        if view.superview !== self { addSubview(view) }
+        errorView = view
+        gridContentChanged()
+    }
+
     var headerHeight: CGFloat { showsHeader ? FileHeaderView.height : 0 }
 
     /// Preferred height at a width.
     public func preferredHeight(forWidth width: CGFloat) -> CGFloat {
-        headerHeight + (showsCode ? grid.requiredHeight(forWidth: width) : 0)
+        if let errorView { return headerHeight + errorView.preferredHeight(forWidth: width) }
+        return headerHeight + (showsCode ? grid.requiredHeight(forWidth: width) : 0)
     }
 
     public override var intrinsicContentSize: NSSize {
@@ -153,6 +184,11 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
         header.isHidden = !showsHeader
         let maxOffset = max(0, bounds.height - headerHeight)
         header.frame = CGRect(x: 0, y: min(max(0, stickyHeaderOffset), maxOffset), width: bounds.width, height: headerHeight)
+        if let errorView {
+            grid.isHidden = true
+            errorView.frame = CGRect(x: 0, y: headerHeight, width: bounds.width, height: errorView.preferredHeight(forWidth: bounds.width))
+            return
+        }
         grid.isHidden = !showsCode
         let gridHeight = showsCode ? grid.requiredHeight(forWidth: bounds.width) : 0
         grid.frame = CGRect(x: 0, y: headerHeight, width: bounds.width, height: gridHeight)
@@ -241,4 +277,63 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
     var gridHandlesGutterUtilityClicks: Bool { false }
     var gridHandlesTokenEvents: Bool { false }
     var gridHandlesLineHoverEvents: Bool { false }
+}
+
+/// `[data-error-wrapper]`: the error message and details, scrollable up to
+/// 400pt.
+final class RenderErrorView: NSView {
+    private let scrollView = NSScrollView()
+    private let stack = NSStackView()
+    private let message = NSTextField(wrappingLabelWithString: "")
+    private let details = NSTextField(wrappingLabelWithString: "")
+    private static let gap: CGFloat = 8
+
+    override var isFlipped: Bool { true }
+
+    init() {
+        super.init(frame: .zero)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.edgeInsets = NSEdgeInsets(top: Self.gap, left: Self.gap, bottom: Self.gap, right: Self.gap)
+        stack.addArrangedSubview(message)
+        stack.addArrangedSubview(details)
+        message.isSelectable = true
+        details.isSelectable = true
+        scrollView.documentView = stack
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = false
+        addSubview(scrollView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func show(_ error: Error, style: DiffsStyleContext) {
+        message.stringValue = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        message.font = .boldSystemFont(ofSize: 18)
+        message.textColor = NSColor(cgColor: style.cgColor(style.palette.deletionBase))
+        // Swift errors carry no stack; show their full description.
+        details.stringValue = String(reflecting: error)
+        details.font = NSFont(descriptor: (style.regularFont as NSFont).fontDescriptor, size: (style.regularFont as NSFont).pointSize)
+        details.textColor = NSColor(cgColor: style.cgColor(style.palette.fgNumber))
+        needsLayout = true
+    }
+
+    func preferredHeight(forWidth width: CGFloat) -> CGFloat {
+        let inner = max(0, width - Self.gap * 2)
+        message.preferredMaxLayoutWidth = inner
+        details.preferredMaxLayoutWidth = inner
+        let content = message.fittingSize.height + stack.spacing + details.fittingSize.height + Self.gap * 2
+        return min(400, ceil(content))
+    }
+
+    override func layout() {
+        super.layout()
+        scrollView.frame = bounds
+        let height = preferredHeight(forWidth: bounds.width)
+        stack.frame = CGRect(x: 0, y: 0, width: bounds.width, height: max(height, message.fittingSize.height + details.fittingSize.height + stack.spacing + Self.gap * 2))
+    }
 }

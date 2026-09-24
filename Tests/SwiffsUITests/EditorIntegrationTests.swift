@@ -200,4 +200,15 @@ struct EditorIntegrationTests {
         grid.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(grid.accessibilityValue() as? String == "const x = 1;\nconst b = 2;\n")
     }
+
+    @Test func keymapChangesApplyToLiveSession() throws {
+        let (view, editor, window) = makeFileEditor("b\na\n")
+        editor.setSelections([EditorSelection(caret: Position(line: 1, character: 0))])
+        // ctrl+j is unbound by default.
+        key(view.grid, window, keyCode: 38, chars: "j", flags: .control)
+        #expect(editor.getText() == "b\na\n")
+        editor.options.keymap = [EditorKeymapGroup(bindings: ["ctrl+j": .moveLineUp])]
+        key(view.grid, window, keyCode: 38, chars: "j", flags: .control)
+        #expect(editor.getText() == "a\nb\n")
+    }
 }

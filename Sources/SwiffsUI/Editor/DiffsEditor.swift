@@ -37,6 +37,10 @@ public struct DiffsEditPredictionOptions {
     public var include: [EditPredictionPattern]?
     /// Path patterns to exclude; exclusions win.
     public var exclude: [EditPredictionPattern]?
+    /// Identity of this configuration; copies share it. Assigning options with
+    /// a different configuration resets prediction state, like upstream's
+    /// reference comparison in `setOptions`.
+    public let id = UUID()
 
     public init(provider: any EditPredictProvider, mode: Mode = .eager, include: [EditPredictionPattern]? = nil, exclude: [EditPredictionPattern]? = nil) {
         self.provider = provider
@@ -175,7 +179,9 @@ protocol EditorLineSource: AnyObject {
 
 @MainActor
 public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEditorClient, EditorLineSource {
-    public var options: DiffsEditorOptions
+    public var options: DiffsEditorOptions {
+        didSet { optionsDidChange(from: oldValue) }
+    }
     public var onChange: ((DiffsEditorChangeEvent) -> Void)?
     public var onFocus: (() -> Void)?
     public var onBlur: (() -> Void)?
@@ -230,6 +236,20 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         self.options = options
         self.editStateKey = editStateKey
         compiledKeymap = options.keymap.map(CompiledEditorKeymap.init)
+    }
+
+    /// `setOptions`: applies option changes to a live session.
+    private func optionsDidChange(from previous: DiffsEditorOptions) {
+        compiledKeymap = options.keymap.map(CompiledEditorKeymap.init)
+        if previous.editPrediction?.id != options.editPrediction?.id {
+            cancelPrediction()
+            predictionHistory = []
+            if document != nil { schedulePrediction() }
+        }
+        if previous.matchBrackets != options.matchBrackets {
+            updateBracketMatch()
+            host?.editorGrid.needsDisplay = true
+        }
     }
 
     // MARK: - Attaching

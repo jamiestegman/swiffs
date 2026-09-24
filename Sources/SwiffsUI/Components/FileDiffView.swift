@@ -311,6 +311,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             model.mergeConflictActionsType = mergeConflict.actionsType
         }
         grid.update(model: model, options: gridOptions, style: style)
+        grid.setAccessibilityLabel(fileDiff?.name)
         gridContentChanged()
         onPostRender?(self)
     }

@@ -46,6 +46,12 @@ protocol GridEditorClient: AnyObject {
     var editorGhostText: [(position: Position, text: String)] { get }
     var editorBracketMatchColor: CGColor? { get }
     var editorMarkedText: (text: String, range: DocumentRange)? { get }
+    var editorText: String { get }
+    /// UTF-16 offset of a document position.
+    func editorOffset(of position: Position) -> Int
+    func editorPosition(ofOffset offset: Int) -> Position
+    /// Selects a UTF-16 range (assistive technology).
+    func editorSelectOffsets(_ start: Int, _ end: Int)
 
     func editorKeyDown(_ event: NSEvent) -> Bool
     func editorInsertText(_ text: String)

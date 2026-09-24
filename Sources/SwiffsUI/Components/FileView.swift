@@ -177,6 +177,7 @@ public final class FileView<Metadata>: DiffsDocumentView {
         guard let rowsResult else { return }
         grid.controlledSelection = options.controlledSelection
         grid.update(model: GridModel(file: rowsResult), options: gridOptions, style: style)
+        grid.setAccessibilityLabel(file?.name)
         gridContentChanged()
         onPostRender?(self)
     }

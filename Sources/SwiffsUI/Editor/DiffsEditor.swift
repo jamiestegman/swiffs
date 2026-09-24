@@ -548,6 +548,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         host.editorGrid.scrollEditorCaretToVisible()
         host.editorGrid.restartCaretBlink()
         host.editorGrid.needsDisplay = true
+        host.editorGrid.postEditorAccessibilityNotification(.valueChanged)
         if let file = getFile() {
             onChange?(DiffsEditorChangeEvent(changes: change.changes, file: file))
         }
@@ -741,6 +742,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         updateBracketMatch()
         host?.editorGrid.restartCaretBlink()
         host?.editorGrid.needsDisplay = true
+        host?.editorGrid.postEditorAccessibilityNotification(.selectedTextChanged)
     }
 
     private func updateBracketMatch() {
@@ -1102,6 +1104,14 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     var editorSide: AnnotationSide { .additions }
     var editorSelections: [EditorSelection] { selections }
     var editorMarkedText: (text: String, range: DocumentRange)? { markedText }
+
+    var editorText: String { document?.getText() ?? "" }
+    func editorOffset(of position: Position) -> Int { document?.offsetAt(position) ?? 0 }
+    func editorPosition(ofOffset offset: Int) -> Position { document?.positionAt(offset) ?? Position(line: 0, character: 0) }
+    func editorSelectOffsets(_ start: Int, _ end: Int) {
+        guard let document else { return }
+        updateSelections([EditorSelection(start: document.positionAt(start), end: document.positionAt(end), direction: .forward)])
+    }
 
     var editorOverlays: [GridEditorOverlay] {
         var overlays: [GridEditorOverlay] = []

@@ -183,4 +183,21 @@ struct EditorIntegrationTests {
         #expect(remaining < end)
         #expect(long.hasPrefix(String(editor.getText().dropLast())))
     }
+
+    @Test func accessibilityExposesLabeledTextArea() throws {
+        let (view, editor, _) = makeFileEditor("const a = 1;\nconst b = 2;\n")
+        let grid = view.grid
+        #expect(grid.accessibilityRole() == .textArea)
+        #expect(grid.accessibilityLabel() == "a.ts")
+        #expect(grid.accessibilityValue() as? String == "const a = 1;\nconst b = 2;\n")
+        editor.setSelections([EditorSelection(start: Position(line: 1, character: 0), end: Position(line: 1, character: 5), direction: .forward)])
+        #expect(grid.accessibilitySelectedTextRange() == NSRange(location: 13, length: 5))
+        #expect(grid.accessibilitySelectedText() == "const")
+        #expect(grid.accessibilityInsertionPointLineNumber() == 1)
+        #expect(grid.accessibilityRange(forLine: 1) == NSRange(location: 13, length: 13))
+        grid.setAccessibilitySelectedTextRange(NSRange(location: 6, length: 1))
+        #expect(editor.selections.last?.focus == Position(line: 0, character: 7))
+        grid.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(grid.accessibilityValue() as? String == "const x = 1;\nconst b = 2;\n")
+    }
 }

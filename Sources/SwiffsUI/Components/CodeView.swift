@@ -6,6 +6,7 @@
 import AppKit
 import QuartzCore
 import SwiffsCore
+import SwiffsEditor
 import SwiffsHighlight
 
 /// An item rendered by `CodeView` (`CodeViewItem`).
@@ -20,20 +21,23 @@ public struct CodeViewItem<Metadata> {
     /// Bump to force a re-render when content changes in place.
     public var version: Int
     public var collapsed: Bool
+    /// Edit mode (`edit`): the item gets an editor while mounted.
+    public var edit: Bool
 
-    public init(id: String, content: Content, version: Int = 0, collapsed: Bool = false) {
+    public init(id: String, content: Content, version: Int = 0, collapsed: Bool = false, edit: Bool = false) {
         self.id = id
         self.content = content
         self.version = version
         self.collapsed = collapsed
+        self.edit = edit
     }
 
-    public static func file(id: String, _ file: FileContents, annotations: [LineAnnotation<Metadata>] = [], version: Int = 0, collapsed: Bool = false) -> CodeViewItem {
-        CodeViewItem(id: id, content: .file(file, annotations: annotations), version: version, collapsed: collapsed)
+    public static func file(id: String, _ file: FileContents, annotations: [LineAnnotation<Metadata>] = [], version: Int = 0, collapsed: Bool = false, edit: Bool = false) -> CodeViewItem {
+        CodeViewItem(id: id, content: .file(file, annotations: annotations), version: version, collapsed: collapsed, edit: edit)
     }
 
-    public static func diff(id: String, _ fileDiff: FileDiffMetadata, annotations: [DiffLineAnnotation<Metadata>] = [], version: Int = 0, collapsed: Bool = false) -> CodeViewItem {
-        CodeViewItem(id: id, content: .diff(fileDiff, annotations: annotations), version: version, collapsed: collapsed)
+    public static func diff(id: String, _ fileDiff: FileDiffMetadata, annotations: [DiffLineAnnotation<Metadata>] = [], version: Int = 0, collapsed: Bool = false, edit: Bool = false) -> CodeViewItem {
+        CodeViewItem(id: id, content: .diff(fileDiff, annotations: annotations), version: version, collapsed: collapsed, edit: edit)
     }
 
     var isDiff: Bool {
@@ -154,6 +158,18 @@ public final class CodeView<Metadata>: NSView {
     private let scrollView = NSScrollView()
     private let documentView = CodeViewDocumentView()
     private var states: [ItemState] = []
+    /// Editors of edit-mode items (see `CodeView+Editing.swift`).
+    var itemEditors: [String: CodeViewItemEditor] = [:]
+    let editStateScope = UUID().uuidString
+    /// Options for item editors.
+    public var editorOptions = DiffsEditorOptions()
+    /// Retention key for an item's edit state (`getEditStateKey`).
+    public var getEditStateKey: ((Item) -> String?)?
+    /// Called on every item edit (`onItemEditChange`).
+    public var onItemEditChange: ((DiffsEditorChangeEvent, CodeViewItemContext) -> Void)?
+    /// Decides whether a finished item edit installs (`onItemEditComplete`).
+    /// Update the item with the result to keep it.
+    public var onItemEditComplete: ((CodeViewItemEditComplete<Metadata>, CodeViewItemContext) -> EditCompletionDecision)?
     private var indexByID: [String: Int] = [:]
     private var mountedDiffViews: [String: FileDiffView<Metadata>] = [:]
     private var mountedFileViews: [String: FileView<Metadata>] = [:]
@@ -219,6 +235,7 @@ public final class CodeView<Metadata>: NSView {
             return ItemState(item: item)
         }
         rebuildIndex()
+        syncItemEditors(removed: previous.filter { indexByID[$0.key] == nil }.mapValues(\.item))
         for (id, _) in previous where indexByID[id] == nil {
             unmount(id)
         }
@@ -254,6 +271,7 @@ public final class CodeView<Metadata>: NSView {
         }
         state.item = item
         state.estimatedHeight = estimateHeight(state)
+        syncItemEditors(removed: [:])
         relayoutItems()
         return true
     }
@@ -273,7 +291,9 @@ public final class CodeView<Metadata>: NSView {
     @discardableResult
     public func removeItem(_ id: String) -> Bool {
         guard let index = indexByID[id] else { return false }
-        states.remove(at: index)
+        let removed = states.remove(at: index)
+        rebuildIndex()
+        syncItemEditors(removed: [id: removed.item])
         unmount(id)
         rebuildIndex()
         relayoutItems()
@@ -677,7 +697,7 @@ public final class CodeView<Metadata>: NSView {
                 documentView.addSubview(diffView)
                 state.renderedVersion = nil
             }
-            if state.renderedVersion != state.item.version || diffView.fileDiff != diff {
+            if itemEditors[state.item.id]?.attached != true, state.renderedVersion != state.item.version || diffView.fileDiff != diff {
                 var itemOptions = options.diff
                 itemOptions.code.collapsed = state.item.collapsed
                 diffView.options = itemOptions
@@ -697,7 +717,7 @@ public final class CodeView<Metadata>: NSView {
                 documentView.addSubview(fileView)
                 state.renderedVersion = nil
             }
-            if state.renderedVersion != state.item.version || fileView.file != file {
+            if itemEditors[state.item.id]?.attached != true, state.renderedVersion != state.item.version || fileView.file != file {
                 var itemOptions = options.fileOptions
                 itemOptions.collapsed = state.item.collapsed
                 fileView.options = itemOptions
@@ -707,6 +727,7 @@ public final class CodeView<Metadata>: NSView {
             }
             view = fileView
         }
+        attachItemEditorIfNeeded(state.item, view: view)
         let height = view.preferredHeight(forWidth: width)
         let changed = state.measuredHeight != height
         state.measuredHeight = height
@@ -813,6 +834,7 @@ public final class CodeView<Metadata>: NSView {
     }
 
     private func unmount(_ id: String) {
+        recycleItemEditor(id)
         if let view = mountedDiffViews.removeValue(forKey: id) {
             view.removeFromSuperview()
             view.stickyHeaderOffset = 0
@@ -823,6 +845,19 @@ public final class CodeView<Metadata>: NSView {
             view.stickyHeaderOffset = 0
             fileViewPool.append(view)
         }
+    }
+
+    func mountedView(_ id: String) -> DiffsDocumentView? {
+        mountedDiffViews[id] ?? mountedFileViews[id]
+    }
+
+    func itemContext(_ id: String) -> CodeViewItemContext? {
+        guard let index = indexByID[id] else { return nil }
+        return CodeViewItemContext(id: id, isDiff: states[index].item.isDiff)
+    }
+
+    func currentItem(_ id: String) -> Item? {
+        indexByID[id].map { states[$0].item }
     }
 
     /// Currently mounted item views (`getRenderedItems`).

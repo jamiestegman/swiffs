@@ -126,7 +126,37 @@ func run() throws {
 
     let view: NSView
     let preferredHeight: (CGFloat) -> CGFloat
-    if let patch = testCase.patch, let oldFile = testCase.oldFile, let newFile = testCase.newFile {
+    if testCase.kind == "codeviewEdit", let oldFile = testCase.oldFile, let newFile = testCase.newFile {
+        let diff = try parseDiffFromFile(oldFile: oldFile, newFile: newFile)
+        let codeView = CodeView<Void>(options: CodeViewOptions())
+        codeView.appearance = appearance
+        codeView.frame = CGRect(x: 0, y: 0, width: width, height: 800)
+        codeView.onItemEditComplete = { event, context in
+            if case .diff(let diffEvent) = event {
+                print("complete \(context.id): \(diffEvent.newFile?.contents.prefix(60).debugDescription ?? "nil")")
+            }
+            return .accept
+        }
+        codeView.onItemEditChange = { event, context in
+            print("change \(context.id): \(event.changes.map(\.text))")
+        }
+        let window = NSWindow(contentRect: codeView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = codeView
+        codeView.setItems([.diff(id: "a", diff, edit: true), .diff(id: "b", diff, edit: true)])
+        codeView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        if let editor = codeView.getEditor("a") as? DiffsEditor<DiffLineAnnotation<Void>> {
+            editor.focus(line: 0, character: 0)
+            try editor.applyEdits([TextEdit(range: DocumentRange(start: Position(line: 0, character: 0), end: Position(line: 0, character: 0)), newText: "// hello\n")])
+            print("editor a text starts: \(editor.getText().prefix(20).debugDescription)")
+        } else {
+            print("no editor for a")
+        }
+        codeView.setItems([.diff(id: "a", diff, edit: false), .diff(id: "b", diff, edit: true)])
+        print("editor a after: \(String(describing: codeView.getEditor("a")))")
+        view = codeView
+        preferredHeight = { _ in 800 }
+    } else if let patch = testCase.patch, let oldFile = testCase.oldFile, let newFile = testCase.newFile {
         let diffView = FileDiffView<Void>(options: options)
         diffView.appearance = appearance
         diffView.synchronousHighlightLineLimit = .max

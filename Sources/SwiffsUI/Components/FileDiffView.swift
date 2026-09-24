@@ -575,7 +575,17 @@ extension FileDiffView: EditorHost {
     /// Keeps the diff's new side and hunks in sync with the edited document
     /// (`updateRenderCache` / `applyDocumentChange`).
     func editorDocumentChanged(_ change: TextDocumentChange?) {
-        guard let change, var diff = fileDiff, let source = editorSource else { return }
+        guard var diff = fileDiff, let source = editorSource else { return }
+        guard let change else {
+            // Resync from a resumed document.
+            let previousLines = diff.additionLines
+            diff.additionLines = (0 ..< source.lineCount).map { source.lineTextWithBreak($0) }
+            if let regionChange = try? rebuildSessionHunks(&diff, options: options.parseDiffOptions, getPreviousAdditionLine: { $0 >= 0 && $0 < previousLines.count ? previousLines[$0] : nil }) {
+                expandedHunks = remapExpandedHunksForRegionChange(expandedHunks, regionChange)
+            }
+            setEditedDiff(diff)
+            return
+        }
         let parseOptions = options.parseDiffOptions
         let sessionType = diff.type
         func preservingType(_ update: (inout FileDiffMetadata) -> Void) {

@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .library(name: "SwiffsCore", targets: ["SwiffsCore"]),
         .library(name: "SwiffsHighlight", targets: ["SwiffsHighlight"]),
+        .library(name: "SwiffsUI", targets: ["SwiffsUI"]),
     ],
     targets: [
         // Pure Swift diff model, patch parsing and diff algorithms. Foundation
@@ -41,6 +42,16 @@ let package = Package(
                 .copy("Resources/Languages"),
                 .copy("Resources/Themes"),
             ]
+        ),
+        // AppKit views: FileDiffView, FileView, CodeView and SwiftUI wrappers.
+        .target(
+            name: "SwiffsUI",
+            dependencies: ["SwiffsCore", "SwiffsHighlight"]
+        ),
+        // Development tool: renders views offscreen to PNG for visual checks.
+        .executableTarget(
+            name: "swiffs-snapshot",
+            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsUI"]
         ),
         .testTarget(name: "SwiffsHighlightTests", dependencies: ["SwiffsHighlight"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsCoreTests", dependencies: ["SwiffsCore"], exclude: ["Fixtures"]),

@@ -17,13 +17,15 @@ public enum CodeViewItemEditComplete<Metadata> {
 final class CodeViewItemEditor {
     let editor: AnyObject
     let complete: () -> Void
+    let discard: () -> Void
     let recycle: () -> Void
     let attach: (DiffsDocumentView) -> Void
     var attached = false
 
-    init(editor: AnyObject, complete: @escaping () -> Void, recycle: @escaping () -> Void, attach: @escaping (DiffsDocumentView) -> Void) {
+    init(editor: AnyObject, complete: @escaping () -> Void, discard: @escaping () -> Void, recycle: @escaping () -> Void, attach: @escaping (DiffsDocumentView) -> Void) {
         self.editor = editor
         self.complete = complete
+        self.discard = discard
         self.recycle = recycle
         self.attach = attach
     }
@@ -64,6 +66,7 @@ extension CodeView {
             record = CodeViewItemEditor(
                 editor: editor,
                 complete: { editor.complete() },
+                discard: { editor.cleanUp(.discard) },
                 recycle: { editor.cleanUp(.recycle) },
                 attach: { [weak self] view in
                     guard let diffView = view as? FileDiffView<Metadata> else { return }
@@ -80,6 +83,7 @@ extension CodeView {
             record = CodeViewItemEditor(
                 editor: editor,
                 complete: { editor.complete() },
+                discard: { editor.cleanUp(.discard) },
                 recycle: { editor.cleanUp(.recycle) },
                 attach: { [weak self] view in
                     guard let fileView = view as? FileView<Metadata> else { return }
@@ -108,6 +112,20 @@ extension CodeView {
 
     /// Completes sessions whose item left edit mode or was removed, and
     /// suspends collapsed items (`syncItemEditors`).
+    /// Ends every edit session without installing results (`reset`).
+    func discardItemEditors() {
+        let records = itemEditors
+        itemEditors.removeAll()
+        for (id, record) in records {
+            if !record.attached, let view = mountedView(id) {
+                record.attach(view)
+                record.attached = true
+            }
+            record.discard()
+            record.attached = false
+        }
+    }
+
     func syncItemEditors(removed: [String: Item]) {
         guard !itemEditors.isEmpty else { return }
         var completions: [(String, CodeViewItemEditor)] = []

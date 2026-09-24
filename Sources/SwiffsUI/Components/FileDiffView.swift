@@ -613,7 +613,7 @@ extension FileDiffView: EditorHost {
         let original = editorOriginalDiff
         editorOriginalHighlight = nil
         editorOriginalDiff = nil
-        if case .complete(_, let annotations) = result, var diff = fileDiff, let original {
+        if case .end(_, let annotations, let install) = result, var diff = fileDiff, let original {
             finishEditSessionForDiff(&diff, options: options.parseDiffOptions)
             diff.cacheKey = nil
             let event = FileDiffEditCompleteEvent(
@@ -626,7 +626,7 @@ extension FileDiffView: EditorHost {
                 originalLineAnnotations: lineAnnotations
             )
             (editor as? AnyEditorCompletionObserver)?.observeCompletion(event)
-            if onEditComplete?(event) == .accept {
+            if onEditComplete?(event) == .accept, install {
                 if let annotations = event.lineAnnotations { setLineAnnotations(annotations) }
                 render(fileDiff: diff, expandedHunks: expandedHunks)
                 grid.invalidateLines()

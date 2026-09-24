@@ -315,7 +315,7 @@ extension FileView: EditorHost {
 
     func editorDetach(result: EditorDetachResult, editor: AnyObject) {
         editorSource = nil
-        if case .complete(let text, let annotations) = result, let original = file {
+        if case .end(let text, let annotations, let install) = result, let original = file {
             let completed = FileContents(name: original.name, contents: text, lang: original.lang)
             let event = FileEditCompleteEvent(
                 file: completed,
@@ -325,7 +325,7 @@ extension FileView: EditorHost {
                 originalLineAnnotations: lineAnnotations
             )
             (editor as? AnyEditorCompletionObserver)?.observeCompletion(event)
-            if onEditComplete?(event) == .accept {
+            if onEditComplete?(event) == .accept, install {
                 if let annotations = event.lineAnnotations { setAnnotations(annotations) }
                 render(file: completed)
                 grid.invalidateLines()

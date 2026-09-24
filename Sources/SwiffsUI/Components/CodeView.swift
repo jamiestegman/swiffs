@@ -136,6 +136,7 @@ public final class CodeView<Metadata>: NSView {
     public var onPostRender: ((NSView, CodeViewItemContext) -> Void)?
     /// Called when the scroll position changes.
     public var onScroll: ((CGFloat) -> Void)?
+    private var scrollListeners: [UUID: (CGFloat, CodeView) -> Void] = [:]
 
     // MARK: Internal state
 
@@ -643,6 +644,26 @@ public final class CodeView<Metadata>: NSView {
     @objc private func boundsDidChange() {
         updateVisibleItems()
         onScroll?(scrollTop)
+        for listener in scrollListeners.values { listener(scrollTop, self) }
+    }
+
+    /// Adds a scroll listener; call the returned function to remove it
+    /// (`subscribeToScroll`).
+    @discardableResult
+    public func subscribeToScroll(_ listener: @escaping (CGFloat, CodeView) -> Void) -> () -> Void {
+        let id = UUID()
+        scrollListeners[id] = listener
+        return { [weak self] in self?.scrollListeners.removeValue(forKey: id) }
+    }
+
+    /// Removes every item and ends edit sessions without installing their
+    /// results (`reset`).
+    public func reset() {
+        discardItemEditors()
+        selection = nil
+        setItems([])
+        scrollView.contentView.scroll(to: .zero)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// Mounts views for items intersecting the viewport (plus overscan) and

@@ -138,8 +138,12 @@ public enum EditCompletionDecision: Sendable {
 
 /// How a view ends an edit session.
 enum EditorDetachResult {
-    case discard
-    case complete(text: String, annotations: [Any]?)
+    /// Recycling: restore the view's input without ending the session.
+    case suspend
+    /// The session ends (`__completeEditSession`): the completion event is
+    /// emitted either way, and the result is installed only when `install`
+    /// is true and the handler accepts.
+    case end(text: String, annotations: [Any]?, install: Bool)
 }
 
 public enum DiffsEditorError: Error, Equatable {
@@ -460,10 +464,10 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         if let host {
             host.editorGrid.editorClient = nil
             switch reason {
-            case .complete:
-                host.editorDetach(result: .complete(text: document?.getText() ?? "", annotations: lineAnnotations), editor: self)
-            case .discard, .recycle:
-                host.editorDetach(result: .discard, editor: self)
+            case .complete, .discard:
+                host.editorDetach(result: .end(text: document?.getText() ?? "", annotations: lineAnnotations, install: reason == .complete), editor: self)
+            case .recycle:
+                host.editorDetach(result: .suspend, editor: self)
             }
         }
         host = nil

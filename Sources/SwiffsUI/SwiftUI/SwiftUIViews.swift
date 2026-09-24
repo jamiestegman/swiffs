@@ -12,11 +12,24 @@ import SwiffsHighlight
 /// so place it inside a `ScrollView` for long diffs, or use `DiffsCodeList`
 /// for virtualized lists.
 public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
-    public var fileDiff: FileDiffMetadata
+    /// What to diff: parsed metadata (`<FileDiff />`), two files
+    /// (`<MultiFileDiff />`) or a single-file patch (`<PatchDiff />`).
+    public enum Input: Equatable {
+        case fileDiff(FileDiffMetadata)
+        case files(old: FileContents?, new: FileContents?)
+        case patch(String)
+    }
+
+    public var input: Input
     public var options: DiffsDiffOptions
     public var annotations: [DiffLineAnnotation<Metadata>]
     public var selectedLines: SelectedLineRange?
     public var renderAnnotation: ((DiffLineAnnotation<Metadata>) -> NSView?)?
+    public var renderCustomHeader: ((FileDiffMetadata) -> NSView?)?
+    public var renderHeaderPrefix: ((FileDiffMetadata) -> NSView?)?
+    public var renderHeaderFilenameSuffix: ((FileDiffMetadata) -> NSView?)?
+    public var renderHeaderMetadata: ((FileDiffMetadata) -> NSView?)?
+    public var renderGutterUtility: (() -> NSView?)?
     public var onLineClick: ((DiffsLineEvent) -> Void)?
     public var onLineSelected: ((SelectedLineRange?) -> Void)?
     public var onGutterUtilityClick: ((SelectedLineRange) -> Void)?
@@ -26,6 +39,12 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
     public var editStateKey: String?
     public var onEditChange: ((DiffsEditorChangeEvent) -> Void)?
     public var onEditComplete: ((FileDiffEditCompleteEvent<Metadata>) -> EditCompletionDecision)?
+
+    /// The diff for `.fileDiff` input.
+    public var fileDiff: FileDiffMetadata? {
+        if case .fileDiff(let diff) = input { return diff }
+        return nil
+    }
 
     public init(
         fileDiff: FileDiffMetadata,
@@ -42,12 +61,79 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
         onEditChange: ((DiffsEditorChangeEvent) -> Void)? = nil,
         onEditComplete: ((FileDiffEditCompleteEvent<Metadata>) -> EditCompletionDecision)? = nil
     ) {
-        self.edit = edit
-        self.editorOptions = editorOptions
-        self.editStateKey = editStateKey
-        self.onEditChange = onEditChange
-        self.onEditComplete = onEditComplete
-        self.fileDiff = fileDiff
+        self.init(
+            input: .fileDiff(fileDiff), options: options, annotations: annotations, selectedLines: selectedLines,
+            renderAnnotation: renderAnnotation, onLineClick: onLineClick, onLineSelected: onLineSelected,
+            onGutterUtilityClick: onGutterUtilityClick, edit: edit, editorOptions: editorOptions, editStateKey: editStateKey,
+            onEditChange: onEditChange, onEditComplete: onEditComplete
+        )
+    }
+
+    /// Diff of two files (`<MultiFileDiff />`), parsed once per input.
+    public init(
+        oldFile: FileContents?,
+        newFile: FileContents?,
+        options: DiffsDiffOptions = DiffsDiffOptions(),
+        annotations: [DiffLineAnnotation<Metadata>] = [],
+        selectedLines: SelectedLineRange? = nil,
+        renderAnnotation: ((DiffLineAnnotation<Metadata>) -> NSView?)? = nil,
+        onLineClick: ((DiffsLineEvent) -> Void)? = nil,
+        onLineSelected: ((SelectedLineRange?) -> Void)? = nil,
+        onGutterUtilityClick: ((SelectedLineRange) -> Void)? = nil,
+        edit: Bool = false,
+        editorOptions: DiffsEditorOptions = DiffsEditorOptions(),
+        editStateKey: String? = nil,
+        onEditChange: ((DiffsEditorChangeEvent) -> Void)? = nil,
+        onEditComplete: ((FileDiffEditCompleteEvent<Metadata>) -> EditCompletionDecision)? = nil
+    ) {
+        self.init(
+            input: .files(old: oldFile, new: newFile), options: options, annotations: annotations, selectedLines: selectedLines,
+            renderAnnotation: renderAnnotation, onLineClick: onLineClick, onLineSelected: onLineSelected,
+            onGutterUtilityClick: onGutterUtilityClick, edit: edit, editorOptions: editorOptions, editStateKey: editStateKey,
+            onEditChange: onEditChange, onEditComplete: onEditComplete
+        )
+    }
+
+    /// A single-file patch (`<PatchDiff />`), parsed once per input.
+    public init(
+        patch: String,
+        options: DiffsDiffOptions = DiffsDiffOptions(),
+        annotations: [DiffLineAnnotation<Metadata>] = [],
+        selectedLines: SelectedLineRange? = nil,
+        renderAnnotation: ((DiffLineAnnotation<Metadata>) -> NSView?)? = nil,
+        onLineClick: ((DiffsLineEvent) -> Void)? = nil,
+        onLineSelected: ((SelectedLineRange?) -> Void)? = nil,
+        onGutterUtilityClick: ((SelectedLineRange) -> Void)? = nil,
+        edit: Bool = false,
+        editorOptions: DiffsEditorOptions = DiffsEditorOptions(),
+        editStateKey: String? = nil,
+        onEditChange: ((DiffsEditorChangeEvent) -> Void)? = nil,
+        onEditComplete: ((FileDiffEditCompleteEvent<Metadata>) -> EditCompletionDecision)? = nil
+    ) {
+        self.init(
+            input: .patch(patch), options: options, annotations: annotations, selectedLines: selectedLines,
+            renderAnnotation: renderAnnotation, onLineClick: onLineClick, onLineSelected: onLineSelected,
+            onGutterUtilityClick: onGutterUtilityClick, edit: edit, editorOptions: editorOptions, editStateKey: editStateKey,
+            onEditChange: onEditChange, onEditComplete: onEditComplete
+        )
+    }
+
+    public init(
+        input: Input,
+        options: DiffsDiffOptions = DiffsDiffOptions(),
+        annotations: [DiffLineAnnotation<Metadata>] = [],
+        selectedLines: SelectedLineRange? = nil,
+        renderAnnotation: ((DiffLineAnnotation<Metadata>) -> NSView?)? = nil,
+        onLineClick: ((DiffsLineEvent) -> Void)? = nil,
+        onLineSelected: ((SelectedLineRange?) -> Void)? = nil,
+        onGutterUtilityClick: ((SelectedLineRange) -> Void)? = nil,
+        edit: Bool = false,
+        editorOptions: DiffsEditorOptions = DiffsEditorOptions(),
+        editStateKey: String? = nil,
+        onEditChange: ((DiffsEditorChangeEvent) -> Void)? = nil,
+        onEditComplete: ((FileDiffEditCompleteEvent<Metadata>) -> EditCompletionDecision)? = nil
+    ) {
+        self.input = input
         self.options = options
         self.annotations = annotations
         self.selectedLines = selectedLines
@@ -55,6 +141,34 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
         self.onLineClick = onLineClick
         self.onLineSelected = onLineSelected
         self.onGutterUtilityClick = onGutterUtilityClick
+        self.edit = edit
+        self.editorOptions = editorOptions
+        self.editStateKey = editStateKey
+        self.onEditChange = onEditChange
+        self.onEditComplete = onEditComplete
+    }
+
+    /// Header slots (`renderCustomHeader`, `renderHeaderPrefix`,
+    /// `renderHeaderFilenameSuffix`, `renderHeaderMetadata`).
+    public func header(
+        custom: ((FileDiffMetadata) -> NSView?)? = nil,
+        prefix: ((FileDiffMetadata) -> NSView?)? = nil,
+        filenameSuffix: ((FileDiffMetadata) -> NSView?)? = nil,
+        metadata: ((FileDiffMetadata) -> NSView?)? = nil
+    ) -> Self {
+        var copy = self
+        copy.renderCustomHeader = custom
+        copy.renderHeaderPrefix = prefix
+        copy.renderHeaderFilenameSuffix = filenameSuffix
+        copy.renderHeaderMetadata = metadata
+        return copy
+    }
+
+    /// Content for the hovered line's gutter button (`renderGutterUtility`).
+    public func gutterUtility(_ render: (() -> NSView?)?) -> Self {
+        var copy = self
+        copy.renderGutterUtility = render
+        return copy
     }
 
     @MainActor
@@ -62,6 +176,8 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
         var editor: DiffsEditor<DiffLineAnnotation<Metadata>>?
         var dispose: (() -> Void)?
         var accepted: (input: FileDiffMetadata, diff: FileDiffMetadata)?
+        /// The last parsed input (`useFileDiffInstance` memoization).
+        var parsed: (input: Input, options: CreatePatchOptions, result: Result<FileDiffMetadata, Error>)?
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator() }
@@ -72,9 +188,30 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
         return view
     }
 
+    private func resolveInput(_ coordinator: Coordinator) -> Result<FileDiffMetadata, Error> {
+        if case .fileDiff(let diff) = input { return .success(diff) }
+        if let parsed = coordinator.parsed, parsed.input == input, parsed.options == options.parseDiffOptions {
+            return parsed.result
+        }
+        let result = Result<FileDiffMetadata, Error> {
+            switch input {
+            case .fileDiff(let diff): return diff
+            case .files(let old, let new): return try parseDiffFromFile(oldFile: old, newFile: new, options: options.parseDiffOptions)
+            case .patch(let patch): return try getSingularPatch(patch)
+            }
+        }
+        coordinator.parsed = (input, options.parseDiffOptions, result)
+        return result
+    }
+
     public func updateNSView(_ view: FileDiffView<Metadata>, context: Context) {
         let coordinator = context.coordinator
         view.renderAnnotation = renderAnnotation
+        if renderCustomHeader != nil || view.renderCustomHeader != nil { view.renderCustomHeader = renderCustomHeader }
+        if renderHeaderPrefix != nil || view.renderHeaderPrefix != nil { view.renderHeaderPrefix = renderHeaderPrefix }
+        if renderHeaderFilenameSuffix != nil || view.renderHeaderFilenameSuffix != nil { view.renderHeaderFilenameSuffix = renderHeaderFilenameSuffix }
+        if renderHeaderMetadata != nil || view.renderHeaderMetadata != nil { view.renderHeaderMetadata = renderHeaderMetadata }
+        if renderGutterUtility != nil || view.renderGutterUtility != nil { view.renderGutterUtility = renderGutterUtility }
         view.onLineClick = onLineClick
         view.onLineSelected = onLineSelected
         view.onGutterUtilityClick = onGutterUtilityClick
@@ -87,6 +224,14 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
         if !edit, let dispose = coordinator.dispose {
             coordinator.dispose = nil
             dispose()
+        }
+        let fileDiff: FileDiffMetadata
+        switch resolveInput(coordinator) {
+        case .success(let diff):
+            fileDiff = diff
+        case .failure(let error):
+            view.reportRenderError(error)
+            return
         }
         var resolved = fileDiff
         if let accepted = coordinator.accepted {
@@ -118,21 +263,6 @@ public struct DiffsFileDiff<Metadata>: NSViewRepresentable {
     }
 }
 
-extension DiffsFileDiff where Metadata == Void {
-    /// Diff of two files (`<MultiFileDiff />`).
-    public init(oldFile: FileContents?, newFile: FileContents?, options: DiffsDiffOptions = DiffsDiffOptions()) {
-        let diff = (try? parseDiffFromFile(oldFile: oldFile, newFile: newFile, options: options.parseDiffOptions))
-            ?? FileDiffMetadata(name: newFile?.name ?? oldFile?.name ?? "", isPartial: false)
-        self.init(fileDiff: diff, options: options)
-    }
-
-    /// A single-file patch (`<PatchDiff />`).
-    public init(patch: String, options: DiffsDiffOptions = DiffsDiffOptions()) {
-        let diff = (try? getSingularPatch(patch)) ?? FileDiffMetadata(name: "", isPartial: true)
-        self.init(fileDiff: diff, options: options)
-    }
-}
-
 /// Renders a file (`<File />`).
 public struct DiffsFile<Metadata>: NSViewRepresentable {
     public var file: FileContents
@@ -140,6 +270,11 @@ public struct DiffsFile<Metadata>: NSViewRepresentable {
     public var annotations: [LineAnnotation<Metadata>]
     public var selectedLines: SelectedLineRange?
     public var renderAnnotation: ((LineAnnotation<Metadata>) -> NSView?)?
+    public var renderCustomHeader: ((FileContents) -> NSView?)?
+    public var renderHeaderPrefix: ((FileContents) -> NSView?)?
+    public var renderHeaderFilenameSuffix: ((FileContents) -> NSView?)?
+    public var renderHeaderMetadata: ((FileContents) -> NSView?)?
+    public var renderGutterUtility: (() -> NSView?)?
     public var onLineClick: ((DiffsLineEvent) -> Void)?
     public var onLineSelected: ((SelectedLineRange?) -> Void)?
     /// Makes the file editable (`edit`).
@@ -177,6 +312,29 @@ public struct DiffsFile<Metadata>: NSViewRepresentable {
         self.onEditComplete = onEditComplete
     }
 
+    /// Header slots (`renderCustomHeader`, `renderHeaderPrefix`,
+    /// `renderHeaderFilenameSuffix`, `renderHeaderMetadata`).
+    public func header(
+        custom: ((FileContents) -> NSView?)? = nil,
+        prefix: ((FileContents) -> NSView?)? = nil,
+        filenameSuffix: ((FileContents) -> NSView?)? = nil,
+        metadata: ((FileContents) -> NSView?)? = nil
+    ) -> Self {
+        var copy = self
+        copy.renderCustomHeader = custom
+        copy.renderHeaderPrefix = prefix
+        copy.renderHeaderFilenameSuffix = filenameSuffix
+        copy.renderHeaderMetadata = metadata
+        return copy
+    }
+
+    /// Content for the hovered line's gutter button (`renderGutterUtility`).
+    public func gutterUtility(_ render: (() -> NSView?)?) -> Self {
+        var copy = self
+        copy.renderGutterUtility = render
+        return copy
+    }
+
     @MainActor
     public final class Coordinator {
         var editor: DiffsEditor<LineAnnotation<Metadata>>?
@@ -194,6 +352,11 @@ public struct DiffsFile<Metadata>: NSViewRepresentable {
     public func updateNSView(_ view: FileView<Metadata>, context: Context) {
         let coordinator = context.coordinator
         view.renderAnnotation = renderAnnotation
+        if renderCustomHeader != nil || view.renderCustomHeader != nil { view.renderCustomHeader = renderCustomHeader }
+        if renderHeaderPrefix != nil || view.renderHeaderPrefix != nil { view.renderHeaderPrefix = renderHeaderPrefix }
+        if renderHeaderFilenameSuffix != nil || view.renderHeaderFilenameSuffix != nil { view.renderHeaderFilenameSuffix = renderHeaderFilenameSuffix }
+        if renderHeaderMetadata != nil || view.renderHeaderMetadata != nil { view.renderHeaderMetadata = renderHeaderMetadata }
+        if renderGutterUtility != nil || view.renderGutterUtility != nil { view.renderGutterUtility = renderGutterUtility }
         view.onLineClick = onLineClick
         view.onLineSelected = onLineSelected
         view.onEditComplete = { event in

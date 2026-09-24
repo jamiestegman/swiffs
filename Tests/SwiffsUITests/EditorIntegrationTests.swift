@@ -141,4 +141,24 @@ struct EditorIntegrationTests {
         #expect(editor.getText() == "a日本b\n")
         #expect(view.line(side: .additions, lineIndex: 0).text == "a日本b")
     }
+
+    @Test func themeChangesRetokenizeEditedLines() async throws {
+        let (view, editor, _) = makeFileEditor("const a = 1;\n")
+        editor.setSelections([EditorSelection(caret: Position(line: 0, character: 12))])
+        view.grid.insertText(" const b = 2;", replacementRange: NSRange(location: NSNotFound, length: 0))
+        func keywordColor() -> String? {
+            let line = view.line(side: .additions, lineIndex: 0)
+            return line.tokens.first?.styles.first?.color
+        }
+        let before = keywordColor()
+        var options = view.options
+        options.theme = .single("github-dark")
+        view.options = options
+        let deadline = Date().addingTimeInterval(2)
+        while keywordColor() == before, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(before != nil)
+        #expect(keywordColor() != before)
+    }
 }

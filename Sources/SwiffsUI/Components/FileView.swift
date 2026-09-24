@@ -125,6 +125,7 @@ public final class FileView<Metadata>: DiffsDocumentView {
     }
 
     override func styleDidChange() {
+        editorSource?.hostThemeDidChange()
         rebuildRows()
         if highlightResult == nil || highlightResult?.themes != ThemeSlots(options.theme) {
             requestHighlight()

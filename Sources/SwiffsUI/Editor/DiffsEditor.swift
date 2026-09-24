@@ -169,6 +169,8 @@ protocol EditorLineSource: AnyObject {
     func highlightedLine(_ index: Int) -> HighlightedLine
     func lineText(_ index: Int) -> String
     func lineTextWithBreak(_ index: Int) -> String
+    /// The host's rendered theme changed (`syncTheme`).
+    func hostThemeDidChange()
 }
 
 @MainActor
@@ -410,6 +412,15 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
 
     func lineTextWithBreak(_ index: Int) -> String {
         document?.getLineText(index, includeLineBreak: true) ?? ""
+    }
+
+    func hostThemeDidChange() {
+        guard let host, let tokenizer else { return }
+        let theme = host.editorTheme
+        if theme.name == tokenizer.themeName, theme.kind == tokenizer.themeType { return }
+        try? highlighter?.prepare(langs: [], themes: [theme.name])
+        tokenizer.changeTheme(theme.name, themeType: theme.kind)
+        host.editorGrid.needsDisplay = true
     }
 
     func highlightedLine(_ index: Int) -> HighlightedLine {

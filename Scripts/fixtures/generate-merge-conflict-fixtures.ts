@@ -6,7 +6,7 @@
 // Usage:
 //   PIERRE_DIR=/path/to/pierre OUT_DIR=Tests/SwiffsCoreTests/Fixtures \
 //     bun Scripts/fixtures/generate-merge-conflict-fixtures.ts
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const PIERRE_DIR = process.env.PIERRE_DIR!;
@@ -172,5 +172,85 @@ for (const [name, oldContents, newContents] of pairs) {
   }
 }
 
-writeFileSync(join(OUT_DIR, 'merge-conflicts.json'), JSON.stringify({ cases, acceptReject }));
-console.log(`conflictCases=${cases.length} acceptReject=${acceptReject.length}`);
+// Sequential resolution through `UnresolvedFile.resolveConflict`, which also
+// rebuilds the unresolved file text and shifts the remaining actions.
+// `UnresolvedFile.ts` itself does not load outside the browser build, so the
+// module-level `rebuildFileAndActions` is extracted into a temporary module
+// next to it and driven like `UnresolvedFile.resolveConflict` does.
+const unresolvedSource = readFileSync(join(src, 'components/UnresolvedFile.ts'), 'utf8');
+const helperSource = unresolvedSource.slice(
+  unresolvedSource.indexOf('interface RebuildFileAndActionsProps'),
+  unresolvedSource.indexOf('function shouldRenderCode')
+);
+const helperPath = join(src, 'components/__swiffsRebuildFileAndActions.ts');
+writeFileSync(
+  helperPath,
+  `import type { FileContents, FileDiffMetadata, MergeConflictMarkerRow, MergeConflictRegion, MergeConflictResolution } from '../types';
+import { buildMergeConflictMarkerRows, type MergeConflictDiffAction } from '../utils/parseMergeConflictDiffFromFile';
+import { splitFileContents } from '../utils/splitFileContents';
+type ResolveConflictReturn = { file: FileContents; fileDiff: FileDiffMetadata; actions: (MergeConflictDiffAction | undefined)[]; markerRows: MergeConflictMarkerRow[] };
+${helperSource}
+export { rebuildFileAndActions };
+`
+);
+let rebuildFileAndActions: any;
+try {
+  ({ rebuildFileAndActions } = await import(helperPath));
+} finally {
+  unlinkSync(helperPath);
+}
+
+function resolveUnresolved(file: any, fileDiff: any, actions: any[], conflictIndex: number, resolution: string) {
+  const action = actions[conflictIndex];
+  if (fileDiff == null || action == null) return undefined;
+  const newFileDiff = resolveConflict(fileDiff, action, resolution);
+  const rebuilt = rebuildFileAndActions({
+    fileDiff: newFileDiff,
+    previousActions: actions,
+    resolvedConflictIndex: conflictIndex,
+    previousFile: file,
+    resolution,
+  });
+  return { ...rebuilt, fileDiff: newFileDiff };
+}
+
+const sequences: any[] = [];
+for (const input of inputs) {
+  let parsed: any;
+  try {
+    parsed = parseMergeConflictDiffFromFile(input);
+  } catch {
+    continue;
+  }
+  const count = parsed.actions.length;
+  if (count === 0 || input.name === 'fileConflictLarge.ts') continue;
+  const orders: number[][] = [[...Array(count).keys()], [...Array(count).keys()].reverse()];
+  for (const order of orders) {
+    for (const type of ['current', 'incoming', 'both']) {
+      const file = { ...input, cacheKey: `${input.name}-key` };
+      let state: any = { file, ...parseMergeConflictDiffFromFile(file) };
+      const steps: any[] = [];
+      for (const conflictIndex of order) {
+        const result = resolveUnresolved(state.file, state.fileDiff, state.actions, conflictIndex, type);
+        if (result == null) {
+          steps.push({ conflictIndex, result: null });
+          continue;
+        }
+        state = result;
+        steps.push({
+          conflictIndex,
+          result: {
+            file: result.file,
+            fileDiff: digest(result.fileDiff),
+            actions: result.actions.map((action: any) => action ?? null),
+            markerRows: result.markerRows,
+          },
+        });
+      }
+      sequences.push({ file, order, type, steps });
+    }
+  }
+}
+
+writeFileSync(join(OUT_DIR, 'merge-conflicts.json'), JSON.stringify({ cases, acceptReject, sequences }));
+console.log(`conflictCases=${cases.length} acceptReject=${acceptReject.length} sequences=${sequences.length}`);

@@ -136,4 +136,48 @@ struct MergeConflictParityTests {
             }
         }
     }
+
+    @Test func sequentialResolutionMatchesUpstream() throws {
+        let sequences = try Self.load()["sequences"] as! [[String: Any]]
+        #expect(sequences.count > 10)
+        for sequence in sequences {
+            let fileObject = sequence["file"] as! [String: Any]
+            var file = FileContents(
+                name: fileObject["name"] as! String,
+                contents: fileObject["contents"] as! String,
+                cacheKey: fileObject["cacheKey"] as? String
+            )
+            let type = MergeConflictResolution(rawValue: sequence["type"] as! String)!
+            let parsed = try parseMergeConflictDiffFromFile(file)
+            var fileDiff = parsed.fileDiff
+            var actions = parsed.actions
+            for (stepIndex, step) in (sequence["steps"] as! [[String: Any]]).enumerated() {
+                let conflictIndex = step["conflictIndex"] as! Int
+                let label = "\(file.name) \(type) \(sequence["order"]!) step=\(stepIndex)"
+                let result = try resolveUnresolvedConflict(
+                    fileDiff: fileDiff,
+                    actions: actions,
+                    conflictIndex: conflictIndex,
+                    resolution: type,
+                    previousFile: file
+                )
+                guard let expected = step["result"] as? [String: Any] else {
+                    #expect(result == nil, "\(label)")
+                    continue
+                }
+                guard let result else {
+                    Issue.record("\(label): expected a result")
+                    break
+                }
+                Self.compare(try Self.json(result.file), expected["file"]!, "\(label) file")
+                Self.compare(try Self.digest(result.fileDiff), expected["fileDiff"]!, "\(label) fileDiff")
+                let resultActions: [Any] = try result.actions.map { try $0.map(Self.json) ?? NSNull() }
+                Self.compare(resultActions, expected["actions"]!, "\(label) actions")
+                Self.compare(try Self.json(result.markerRows), expected["markerRows"]!, "\(label) markerRows")
+                file = result.file
+                fileDiff = result.fileDiff
+                actions = result.actions
+            }
+        }
+    }
 }

@@ -817,7 +817,7 @@ final class CodeGridView: NSView {
         let font = NSFont(descriptor: style.headerFont.fontDescriptor, size: 12) ?? style.headerFont
         var x = contentRect.minX + 8
         var frames: [(MergeConflictResolution, CGRect, String)] = []
-        let items: [(MergeConflictResolution, String)] = [(.current, "Accept Current Change"), (.incoming, "Accept Incoming Change"), (.both, "Accept Both")]
+        let items: [(MergeConflictResolution, String)] = [(.current, "Accept current change"), (.incoming, "Accept incoming change"), (.both, "Accept both")]
         for (index, item) in items.enumerated() {
             let width = textLineWidth(makeTextLine(item.1, font: font, color: .black))
             frames.append((item.0, CGRect(x: x, y: contentRect.minY, width: width, height: contentRect.height), item.1))

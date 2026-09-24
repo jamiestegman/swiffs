@@ -115,17 +115,40 @@ func run() throws {
     let view: NSView
     let preferredHeight: (CGFloat) -> CGFloat
     if testCase.kind == "edit", let file = testCase.file {
-        let fileView = FileView<Void>(options: options.code)
-        fileView.appearance = appearance
-        fileView.synchronousHighlightLineLimit = .max
-        fileView.render(file: file)
-        fileView.frame = CGRect(x: 0, y: 0, width: width, height: fileView.preferredHeight(forWidth: width))
-        let window = NSWindow(contentRect: fileView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        window.contentView = fileView
-        let editor = DiffsEditor<Void>()
-        _ = editor.edit(fileView)
-        editor.focus()
-        guard let grid = window.firstResponder as? NSView else { fatalError("no first responder") }
+        let documentView: DiffsDocumentView
+        let getText: () -> String
+        let getSelections: () -> [EditorSelection]
+        var keepAlive: AnyObject?
+        if let oldFile = testCase.oldFile {
+            let diffView = FileDiffView<Void>(options: options)
+            diffView.appearance = appearance
+            diffView.synchronousHighlightLineLimit = .max
+            try diffView.render(oldFile: oldFile, newFile: file)
+            documentView = diffView
+            diffView.frame = CGRect(x: 0, y: 0, width: width, height: diffView.preferredHeight(forWidth: width))
+            let editor = DiffsEditor<DiffLineAnnotation<Void>>()
+            _ = editor.edit(diffView)
+            keepAlive = editor
+            getText = { editor.getText() }
+            getSelections = { editor.selections }
+        } else {
+            let fileView = FileView<Void>(options: options.code)
+            fileView.appearance = appearance
+            fileView.synchronousHighlightLineLimit = .max
+            fileView.render(file: file)
+            documentView = fileView
+            fileView.frame = CGRect(x: 0, y: 0, width: width, height: fileView.preferredHeight(forWidth: width))
+            let editor = DiffsEditor<LineAnnotation<Void>>()
+            _ = editor.edit(fileView)
+            keepAlive = editor
+            getText = { editor.getText() }
+            getSelections = { editor.selections }
+        }
+        _ = keepAlive
+        let window = NSWindow(contentRect: documentView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = documentView
+        guard let grid = documentView.subviews.first(where: { $0 is NSTextInputClient }) else { fatalError("no grid") }
+        window.makeFirstResponder(grid)
         for action in testCase.editActions ?? [] {
             switch action.type {
             case "text":
@@ -147,9 +170,7 @@ func run() throws {
                 )!
                 if !grid.performKeyEquivalent(with: event) { grid.keyDown(with: event) }
             case "click":
-                let height = fileView.frame.height
-                let location = grid.convert(CGPoint(x: action.x ?? 0, y: action.y ?? 0), from: fileView)
-                _ = height
+                let location = grid.convert(CGPoint(x: action.x ?? 0, y: action.y ?? 0), from: documentView)
                 let windowPoint = grid.convert(location, to: nil)
                 let event = NSEvent.mouseEvent(
                     with: .leftMouseDown, location: windowPoint, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
@@ -160,14 +181,14 @@ func run() throws {
             default:
                 break
             }
-            fileView.frame.size.height = fileView.preferredHeight(forWidth: width)
-            window.setContentSize(fileView.frame.size)
-            fileView.layoutSubtreeIfNeeded()
+            documentView.frame.size.height = documentView.preferredHeight(forWidth: width)
+            window.setContentSize(documentView.frame.size)
+            documentView.layoutSubtreeIfNeeded()
         }
-        print("text: \(editor.getText().debugDescription)")
-        print("selections: \(editor.selections.map { "\($0.start.line):\($0.start.character)-\($0.end.line):\($0.end.character)" })")
-        view = fileView
-        preferredHeight = fileView.preferredHeight(forWidth:)
+        print("text: \(getText().debugDescription)")
+        print("selections: \(getSelections().map { "\($0.start.line):\($0.start.character)-\($0.end.line):\($0.end.character)" })")
+        view = documentView
+        preferredHeight = documentView.preferredHeight(forWidth:)
     } else if testCase.kind == "stream", let file = testCase.file {
         let streamView = FileStreamView(options: FileStreamOptions(code: options.code, lang: testCase.lang))
         streamView.appearance = appearance

@@ -3,6 +3,7 @@
 
 import AppKit
 import SwiffsCore
+import SwiffsEditor
 import SwiffsHighlight
 
 /// Renders one file diff. `Metadata` is the payload type of line
@@ -58,6 +59,12 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
     private var pendingHighlightKey: HighlightKey?
     private var annotationsByKey: [AnnotationKey: [Annotation]] = [:]
     private var plainLineCache: [AnnotationSide: [Int: HighlightedLine]] = [:]
+    /// The attached editor (`DiffsEditor.edit`); retained until it cleans up.
+    private var editorSource: EditorLineSource?
+    /// Highlighting of the diff when editing started (old-side lines stay
+    /// valid for the whole session).
+    private var editorOriginalHighlight: ThemedDiffResult?
+    private var editorOriginalDiff: FileDiffMetadata?
 
     private struct HighlightKey: Equatable {
         var diff: FileDiffMetadata
@@ -222,6 +229,15 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         )
     }
 
+    /// Installs a diff updated by an edit session, keeping expansion and
+    /// highlighting state.
+    fileprivate func setEditedDiff(_ diff: FileDiffMetadata) {
+        fileDiff = diff
+        plainLineCache.removeAll()
+        updateHeader()
+        rebuildRows()
+    }
+
     private func rebuildRows() {
         guard let fileDiff else {
             rowsResult = nil
@@ -350,6 +366,23 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
     }
 
     override func line(side: AnnotationSide, lineIndex: Int) -> HighlightedLine {
+        if let editorSource {
+            if side == .additions { return editorSource.highlightedLine(lineIndex) }
+            if let original = editorOriginalHighlight, lineIndex < original.deletionLines.count, let line = original.deletionLines[lineIndex] {
+                return line
+            }
+            let source = fileDiff?.deletionLines ?? []
+            let text = lineIndex < source.count ? cleanLastNewline(source[lineIndex]) : ""
+            return HighlightedLine.plain(text, slots: ThemeSlots(options.code.theme).count)
+        }
+        return originalLine(side: side, lineIndex: lineIndex)
+    }
+
+    private func originalLine(side: AnnotationSide, lineIndex: Int) -> HighlightedLine {
+        if let original = editorOriginalHighlight, editorOriginalDiff != nil {
+            let lines = side == .deletions ? original.deletionLines : original.additionLines
+            if lineIndex < lines.count, let line = lines[lineIndex] { return line }
+        }
         if let highlightResult, highlightKey?.diff == fileDiff {
             let lines = side == .deletions ? highlightResult.deletionLines : highlightResult.additionLines
             if lineIndex < lines.count, let line = lines[lineIndex] {
@@ -426,3 +459,120 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
 final class MainThreadHighlighter {
     static let shared = DiffsHighlighter()
 }
+
+// MARK: - Editor host
+
+/// Replaces a line's text, keeping its line break (`applyLineTextWithNewline`).
+func applyLineTextWithNewline(_ line: String, _ text: String) -> String {
+    let units = Array(line.utf16)
+    if units.count >= 2, units[units.count - 2] == 0x0D, units[units.count - 1] == 0x0A { return text + "\r\n" }
+    if units.last == 0x0D { return text + "\r" }
+    if units.last == 0x0A { return text + "\n" }
+    return text
+}
+
+extension FileDiffView: EditorHost {
+    var editorGrid: CodeGridView { grid }
+
+    /// The new side as a file; deleted files cannot be edited.
+    var editorFile: FileContents? {
+        guard let fileDiff, fileDiff.type != .deleted else { return nil }
+        return FileContents(name: fileDiff.name, contents: fileDiff.additionLines.joined(), lang: fileDiff.lang)
+    }
+
+    var editorTabSize: Int { options.code.typography.tabSize }
+    var editorWraps: Bool { options.code.overflow == .wrap }
+
+    func editorOriginalLine(_ index: Int) -> HighlightedLine {
+        originalLine(side: .additions, lineIndex: index)
+    }
+
+    func editorAttach(_ provider: EditorLineSource) {
+        editorOriginalHighlight = highlightKey?.diff == fileDiff ? highlightResult : nil
+        editorOriginalDiff = fileDiff
+        editorSource = provider
+        rebuildRows()
+    }
+
+    func editorDetach(finalText: String?) {
+        editorSource = nil
+        guard var diff = fileDiff else { return }
+        finishEditSessionForDiff(&diff, options: options.parseDiffOptions)
+        editorOriginalHighlight = nil
+        editorOriginalDiff = nil
+        let expanded = expandedHunks
+        render(fileDiff: diff, expandedHunks: expanded)
+        grid.invalidateLines()
+    }
+
+    func editorApplyAnnotations(_ annotations: [Any]) {
+        guard let annotations = annotations as? [Annotation] else { return }
+        setLineAnnotations(annotations)
+    }
+
+    var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? {
+        { [weak self] line, direction in
+            guard let self else { return line }
+            let count = self.editorSource?.lineCount ?? 0
+            var candidate = line
+            while candidate >= 0, candidate < count {
+                if self.grid.editorLocation(ofLine: candidate) != nil { return candidate }
+                candidate += direction == .up ? -1 : 1
+            }
+            return nil
+        }
+    }
+
+    /// Keeps the diff's new side and hunks in sync with the edited document
+    /// (`updateRenderCache` / `applyDocumentChange`).
+    func editorDocumentChanged(_ change: TextDocumentChange?) {
+        guard let change, var diff = fileDiff, let source = editorSource else { return }
+        let parseOptions = options.parseDiffOptions
+        let sessionType = diff.type
+        func preservingType(_ update: (inout FileDiffMetadata) -> Void) {
+            update(&diff)
+            diff.type = sessionType
+            diff.editSessionDirty = true
+        }
+        let keepsLineCount = change.lineDelta == 0 && change.changedLineChanges.allSatisfy { $0.lineDelta == 0 }
+        if keepsLineCount {
+            var changed: [Int] = []
+            var previous: [Int: String] = [:]
+            for range in change.changedLineRanges {
+                for line in range where line < diff.additionLines.count {
+                    let prevLine = diff.additionLines[line]
+                    let text = source.lineText(line)
+                    if !cleanLastNewline(prevLine).utf16.elementsEqual(text.utf16) {
+                        diff.additionLines[line] = applyLineTextWithNewline(prevLine, text)
+                        changed.append(line)
+                        previous[line] = prevLine
+                    }
+                }
+            }
+            if !changed.isEmpty {
+                if diff.additionLines.count <= 1, diff.additionLines.joined().isEmpty {
+                    preservingType { recomputeEmptyDocumentDiff(&$0, options: parseOptions) }
+                } else if shouldTopAlignAdditionRecompute(diff, additionLines: diff.additionLines) {
+                    let lines = diff.additionLines
+                    preservingType { recomputeTopAlignedAdditionDiff(&$0, additionLines: lines, options: parseOptions) }
+                } else if let regionChange = try? applySessionChangedLines(&diff, changedAdditionLineIndexes: changed, options: parseOptions, previousAdditionLines: previous) {
+                    expandedHunks = remapExpandedHunksForRegionChange(expandedHunks, regionChange)
+                }
+            }
+        } else {
+            let previousLines = diff.additionLines
+            diff.additionLines = (0 ..< source.lineCount).map { source.lineTextWithBreak($0) }
+            if diff.additionLines.count <= 1, diff.additionLines.joined().isEmpty {
+                preservingType { recomputeEmptyDocumentDiff(&$0, options: parseOptions) }
+            } else if shouldTopAlignAdditionRecompute(diff, additionLines: diff.additionLines) {
+                let lines = diff.additionLines
+                preservingType { recomputeTopAlignedAdditionDiff(&$0, additionLines: lines, options: parseOptions) }
+            } else if let regionChange = try? rebuildSessionHunks(&diff, options: parseOptions, getPreviousAdditionLine: { $0 >= 0 && $0 < previousLines.count ? previousLines[$0] : nil }) {
+                expandedHunks = remapExpandedHunksForRegionChange(expandedHunks, regionChange)
+            }
+        }
+        setEditedDiff(diff)
+    }
+
+}
+

@@ -280,14 +280,6 @@ extension FileView: EditorHost {
     var editorGrid: CodeGridView { grid }
     var editorFile: FileContents? { file }
 
-    var editorTheme: (name: String, kind: ThemeKind) {
-        switch style.theme.slots {
-        case .single(let name):
-            return (name, style.theme.baseThemeType ?? (style.isDark ? .dark : .light))
-        case .pair(let dark, let light):
-            return style.isDark ? (dark, .dark) : (light, .light)
-        }
-    }
 
     var editorTabSize: Int { options.typography.tabSize }
     var editorWraps: Bool { options.overflow == .wrap }
@@ -301,11 +293,23 @@ extension FileView: EditorHost {
         rebuildRows()
     }
 
-    func editorDetach() {
+    func editorDetach(finalText: String?) {
         editorSource = nil
-        rebuildRows()
+        if let finalText, let file {
+            // Keep showing the edited contents.
+            render(file: FileContents(name: file.name, contents: finalText, lang: file.lang, cacheKey: nil))
+        } else {
+            rebuildRows()
+        }
         grid.invalidateLines()
     }
+
+    func editorApplyAnnotations(_ annotations: [Any]) {
+        guard let annotations = annotations as? [Annotation] else { return }
+        applyEditorAnnotations(annotations)
+    }
+
+    var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? { nil }
 
     func editorDocumentChanged(_ change: TextDocumentChange?) {
         rebuildRows()

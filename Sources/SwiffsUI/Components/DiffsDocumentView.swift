@@ -174,6 +174,19 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
         onHeightChange?(preferredHeight(forWidth: bounds.width))
     }
 
+    // MARK: Editing
+
+    /// The rendered theme for the current appearance (the editor tokenizes
+    /// one theme at a time).
+    var editorTheme: (name: String, kind: ThemeKind) {
+        switch style.theme.slots {
+        case .single(let name):
+            return (name, style.theme.baseThemeType ?? (style.isDark ? .dark : .light))
+        case .pair(let dark, let light):
+            return style.isDark ? (dark, .dark) : (light, .light)
+        }
+    }
+
     // MARK: Text selection
 
     /// The text currently selected in the code (nil when nothing is

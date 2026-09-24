@@ -41,15 +41,15 @@ public struct CursorMoveOptions {
     public var getSoftLineOffsets: ((Int) -> [Int]?)?
     /// The nearest renderable line at or beyond a line in a direction (fold
     /// skipping); nil when everything that way is hidden.
-    public var resolveRenderableLine: ((Int, VerticalDirection) -> Int?)?
+    public var resolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)?
 
-    public init(getSoftLineOffsets: ((Int) -> [Int]?)? = nil, resolveRenderableLine: ((Int, VerticalDirection) -> Int?)? = nil) {
+    public init(getSoftLineOffsets: ((Int) -> [Int]?)? = nil, resolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? = nil) {
         self.getSoftLineOffsets = getSoftLineOffsets
         self.resolveRenderableLine = resolveRenderableLine
     }
 }
 
-public enum VerticalDirection: Sendable {
+public enum CursorVerticalDirection: Sendable {
     case up, down
 }
 

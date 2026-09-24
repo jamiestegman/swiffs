@@ -38,7 +38,11 @@ protocol EditorHost: AnyObject {
     /// The host's current (pre-edit) highlighted line.
     func editorOriginalLine(_ index: Int) -> HighlightedLine
     func editorAttach(_ provider: EditorLineSource)
-    func editorDetach()
+    func editorDetach(finalText: String?)
+    /// Annotations moved by an edit (typed as the host's annotations).
+    func editorApplyAnnotations(_ annotations: [Any])
+    /// Fold skipping for vertical moves; nil when every line renders.
+    var editorResolveRenderableLine: ((Int, CursorVerticalDirection) -> Int?)? { get }
     /// Rebuild rows after the document changed.
     func editorDocumentChanged(_ change: TextDocumentChange?)
 }
@@ -49,12 +53,11 @@ protocol EditorLineSource: AnyObject {
     var lineCount: Int { get }
     func highlightedLine(_ index: Int) -> HighlightedLine
     func lineText(_ index: Int) -> String
+    func lineTextWithBreak(_ index: Int) -> String
 }
 
 @MainActor
-public final class DiffsEditor<Metadata>: GridEditorClient, EditorLineSource {
-    public typealias Annotation = LineAnnotation<Metadata>
-
+public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEditorClient, EditorLineSource {
     public var options: DiffsEditorOptions
     public var onChange: ((DiffsEditorChangeEvent) -> Void)?
     public var onFocus: (() -> Void)?
@@ -95,7 +98,14 @@ public final class DiffsEditor<Metadata>: GridEditorClient, EditorLineSource {
     /// Starts editing a file view (`editor.edit(fileInstance)`); returns a
     /// function that detaches.
     @discardableResult
-    public func edit(_ view: FileView<Metadata>) -> () -> Void {
+    public func edit<Metadata>(_ view: FileView<Metadata>) -> () -> Void where Annotation == LineAnnotation<Metadata> {
+        attach(view, annotations: view.lineAnnotations)
+        return { [weak self] in self?.cleanUp() }
+    }
+
+    /// Starts editing the new side of a diff view.
+    @discardableResult
+    public func edit<Metadata>(_ view: FileDiffView<Metadata>) -> () -> Void where Annotation == DiffLineAnnotation<Metadata> {
         attach(view, annotations: view.lineAnnotations)
         return { [weak self] in self?.cleanUp() }
     }
@@ -132,7 +142,7 @@ public final class DiffsEditor<Metadata>: GridEditorClient, EditorLineSource {
         tokenizer = nil
         if let host {
             host.editorGrid.editorClient = nil
-            host.editorDetach()
+            host.editorDetach(finalText: document?.getText())
         }
         host = nil
         document = nil
@@ -213,6 +223,10 @@ public final class DiffsEditor<Metadata>: GridEditorClient, EditorLineSource {
         document?.getLineText(index) ?? ""
     }
 
+    func lineTextWithBreak(_ index: Int) -> String {
+        document?.getLineText(index, includeLineBreak: true) ?? ""
+    }
+
     func highlightedLine(_ index: Int) -> HighlightedLine {
         guard index >= 0, index < lineStore.count else { return HighlightedLine(text: "", tokens: []) }
         switch lineStore[index] {
@@ -282,7 +296,7 @@ public final class DiffsEditor<Metadata>: GridEditorClient, EditorLineSource {
         }
         if let annotations {
             lineAnnotations = annotations
-            (host as? FileView<Metadata>)?.applyEditorAnnotations(annotations)
+            host.editorApplyAnnotations(annotations)
         }
         if let dirty = try? tokenizer?.tokenize(change) {
             for (line, tokens) in dirty where line < lineStore.count {
@@ -624,7 +638,10 @@ public final class DiffsEditor<Metadata>: GridEditorClient, EditorLineSource {
         }
         if let move = moveCursorShortcut(keyEvent) {
             let wrap = host?.editorWraps == true
-            let moveOptions = CursorMoveOptions(getSoftLineOffsets: wrap ? { [weak self] line in self?.softLineOffsets(line) } : nil)
+            let moveOptions = CursorMoveOptions(
+                getSoftLineOffsets: wrap ? { [weak self] line in self?.softLineOffsets(line) } : nil,
+                resolveRenderableLine: host?.editorResolveRenderableLine
+            )
             updateSelections(keyEvent.shiftKey
                 ? mapSelectionShift(document, selections, move, options: moveOptions)
                 : mapCursorMove(document, selections, move, options: moveOptions))

@@ -62,6 +62,17 @@ PIERRE_DIR=/path/to/pierre OUT_DIR=Tests/SwiffsCoreTests/Fixtures \
 Rendering is compared against headless-browser screenshots of the published
 package with `swift run swiffs-snapshot <case.json> <out.png>`.
 
+## Performance
+
+Highlighting matches Shiki token for token, and is organized for native use:
+
+- One grammar pass serves every theme; light/dark colors are resolved from
+  the same scopes instead of re-tokenizing per theme.
+- Short lines are matched with Oniguruma's `OnigRegSet`, like
+  vscode-oniguruma.
+- Diffs highlight on a background worker pool (with an LRU cache keyed by
+  `cacheKey`); large diffs tokenize their two sides concurrently.
+
 ## Demo
 
 ```sh

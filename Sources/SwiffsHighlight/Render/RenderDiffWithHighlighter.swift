@@ -328,41 +328,6 @@ private func normalizeHighlightLineEndings(_ contents: String) -> String {
     return String(decoding: units, as: UTF16.self)
 }
 
-/// Port of `linesFromFileContents`: splits on `\n`, `\r` and `\r\n`, keeping
-/// line endings; a trailing newline produces a final empty line.
-public func linesFromFileContents(_ contents: String) -> [String] {
-    let offsets = computeLineOffsets(contents)
-    let units = Array(contents.utf16)
-    return offsets.indices.map { i in
-        let start = offsets[i]
-        let end = i + 1 < offsets.count ? offsets[i + 1] : units.count
-        return String(decoding: units[start ..< end], as: UTF16.self)
-    }
-}
-
-/// Port of `computeLineOffsets` (UTF-16 offsets of line starts).
-public func computeLineOffsets(_ contents: String) -> [Int] {
-    var offsets = [0]
-    let units = Array(contents.utf16)
-    var i = 0
-    while i < units.count {
-        let unit = units[i]
-        if unit == 0x0A || unit == 0x0D {
-            if unit == 0x0D, i + 1 < units.count, units[i + 1] == 0x0A {
-                i += 1
-            }
-            offsets.append(i + 1)
-        }
-        i += 1
-    }
-    return offsets
-}
-
-/// Port of `countLineBreaks`.
-public func countLineBreaks(_ contents: String) -> Int {
-    computeLineOffsets(contents).count - 1
-}
-
 // MARK: - Line diff decorations
 
 private func computeLineDiffDecorations(

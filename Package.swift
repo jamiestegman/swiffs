@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .library(name: "SwiffsCore", targets: ["SwiffsCore"]),
         .library(name: "SwiffsHighlight", targets: ["SwiffsHighlight"]),
+        .library(name: "SwiffsEditor", targets: ["SwiffsEditor"]),
         .library(name: "SwiffsUI", targets: ["SwiffsUI"]),
     ],
     targets: [
@@ -43,6 +44,12 @@ let package = Package(
                 .copy("Resources/Themes"),
             ]
         ),
+        // Editor model: piece table, text document, edit history, selections
+        // and commands. No UI dependencies.
+        .target(
+            name: "SwiffsEditor",
+            dependencies: ["SwiffsCore", "SwiffsHighlight"]
+        ),
         // AppKit views: FileDiffView, FileView, CodeView and SwiftUI wrappers.
         .target(
             name: "SwiffsUI",
@@ -62,5 +69,6 @@ let package = Package(
         ),
         .testTarget(name: "SwiffsHighlightTests", dependencies: ["SwiffsHighlight"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsCoreTests", dependencies: ["SwiffsCore"], exclude: ["Fixtures"]),
+        .testTarget(name: "SwiffsEditorTests", dependencies: ["SwiffsEditor"], exclude: ["Fixtures"]),
     ]
 )

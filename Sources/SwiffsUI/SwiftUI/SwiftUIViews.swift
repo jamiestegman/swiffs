@@ -171,6 +171,52 @@ public struct DiffsUnresolvedFile: NSViewRepresentable {
     }
 }
 
+/// Renders code as it streams in (`FileStream`). A new `id` restarts the
+/// stream from `source`.
+public struct DiffsFileStream<Source: AsyncSequence & Sendable>: NSViewRepresentable where Source.Element == String {
+    public var id: AnyHashable
+    public var source: Source
+    public var options: FileStreamOptions
+    public var onStreamClose: (() -> Void)?
+
+    public init(id: AnyHashable, source: Source, options: FileStreamOptions = FileStreamOptions(), onStreamClose: (() -> Void)? = nil) {
+        self.id = id
+        self.source = source
+        self.options = options
+        self.onStreamClose = onStreamClose
+    }
+
+    public final class Coordinator {
+        var streamID: AnyHashable?
+    }
+
+    public func makeCoordinator() -> Coordinator { Coordinator() }
+
+    public func makeNSView(context: Context) -> FileStreamView {
+        let view = FileStreamView(options: options)
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return view
+    }
+
+    public func updateNSView(_ view: FileStreamView, context: Context) {
+        view.onStreamClose = onStreamClose
+        if view.options != options { view.setOptions(options) }
+        if context.coordinator.streamID != id {
+            context.coordinator.streamID = id
+            view.setup(source)
+        }
+    }
+
+    public static func dismantleNSView(_ view: FileStreamView, coordinator: Coordinator) {
+        view.cleanUp()
+    }
+
+    public func sizeThatFits(_ proposal: ProposedViewSize, nsView: FileStreamView, context: Context) -> CGSize? {
+        let width = proposal.width ?? 800
+        return CGSize(width: width, height: nsView.preferredHeight(forWidth: width))
+    }
+}
+
 /// A virtualized list of files and diffs (`<CodeView />`).
 public struct DiffsCodeList<Metadata>: NSViewRepresentable {
     public var items: [CodeViewItem<Metadata>]

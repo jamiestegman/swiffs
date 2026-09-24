@@ -129,7 +129,10 @@ final class CodeGridView: NSView {
 
     func update(model: GridModel, options: GridOptions, style: DiffsStyleContext) {
         let styleChanged = style !== self.style
-        let rowsChanged = model.rows != self.model.rows || model.kind != self.model.kind || model.isSplit != self.model.isSplit
+        let sameShape = model.kind == self.model.kind && model.isSplit == self.model.isSplit
+        // Appending rows (streaming) keeps cached layouts and views.
+        let appendedOnly = sameShape && model.rows.count >= self.model.rows.count && model.rows.starts(with: self.model.rows)
+        let rowsChanged = !appendedOnly && (model.rows != self.model.rows || !sameShape)
         self.model = model
         self.options = options
         self.style = style
@@ -144,6 +147,19 @@ final class CodeGridView: NSView {
         }
         layoutWidth = -1
         relayout(width: bounds.width)
+        needsDisplay = true
+    }
+
+    /// Drops cached layouts of specific lines (streamed content changed).
+    func invalidateLines<S: Sequence>(side: AnnotationSide, lineIndexes: S) where S.Element == Int {
+        for lineIndex in lineIndexes {
+            lineLayouts[LineKey(side: side, lineIndex: lineIndex, dimmed: false)] = nil
+            lineLayouts[LineKey(side: side, lineIndex: lineIndex, dimmed: true)] = nil
+        }
+        if options.overflow == .wrap {
+            layoutWidth = -1
+            relayout(width: bounds.width)
+        }
         needsDisplay = true
     }
 

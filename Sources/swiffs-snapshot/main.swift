@@ -57,6 +57,7 @@ struct Case: Decodable {
     }
 
     var kind: String
+    var lang: String?
     var scheme: String?
     var width: Double?
     var oldFile: FileContents?
@@ -97,7 +98,29 @@ func run() throws {
 
     let view: NSView
     let preferredHeight: (CGFloat) -> CGFloat
-    if testCase.kind == "unresolved", let file = testCase.file {
+    if testCase.kind == "stream", let file = testCase.file {
+        let streamView = FileStreamView(options: FileStreamOptions(code: options.code, lang: testCase.lang))
+        streamView.appearance = appearance
+        var closed = false
+        streamView.onStreamClose = { closed = true }
+        streamView.begin()
+        var chunk = ""
+        for character in file.contents {
+            chunk.append(character)
+            if chunk.utf16.count >= 7 {
+                streamView.write(chunk)
+                chunk = ""
+            }
+        }
+        if !chunk.isEmpty { streamView.write(chunk) }
+        streamView.close()
+        let deadline = Date().addingTimeInterval(20)
+        while !closed, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        view = streamView
+        preferredHeight = streamView.preferredHeight(forWidth:)
+    } else if testCase.kind == "unresolved", let file = testCase.file {
         let unresolvedView = UnresolvedFileView<Void>(options: options)
         unresolvedView.appearance = appearance
         unresolvedView.diffView.synchronousHighlightLineLimit = .max

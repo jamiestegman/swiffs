@@ -78,14 +78,20 @@ public final class DiffsHighlighter {
     /// `codeToHast` with `defaultColor: false`). Returns one token list per
     /// line; each token has one style per theme slot.
     func tokenize(_ code: String, lang: String, themes: ThemeSlots, tokenizeMaxLineLength: Int) throws -> [[(content: String, styles: [TokenStyle])]] {
-        let lines = try tokenizeUnmerged(code, lang: lang, themes: themes, tokenizeMaxLineLength: tokenizeMaxLineLength)
+        let lines = try tokenizeLines(code, lang: lang, themes: themes, tokenizeMaxLineLength: tokenizeMaxLineLength)
         // codeToHast's default `mergeWhitespaces: true`.
         return mergeWhitespaceTokens(lines, multiTheme: themes.count > 1)
     }
 
-    private func tokenizeUnmerged(_ code: String, lang: String, themes: ThemeSlots, tokenizeMaxLineLength: Int) throws -> [[(content: String, styles: [TokenStyle])]] {
+    /// Unattached languages render as plain text.
+    func streamLanguage(_ lang: String) -> String {
+        (lang == "ansi" || attachedLanguages.contains(lang) || isPlainLang(lang)) ? lang : "text"
+    }
+
+    /// Tokenizes without merging whitespace tokens.
+    func tokenizeLines(_ code: String, lang: String, themes: ThemeSlots, tokenizeMaxLineLength: Int) throws -> [[(content: String, styles: [TokenStyle])]] {
         let options = TokenizeOptions(tokenizeMaxLineLength: tokenizeMaxLineLength, tokenizeTimeLimit: 0)
-        let effectiveLang = (lang == "ansi" || attachedLanguages.contains(lang) || isPlainLang(lang)) ? lang : "text"
+        let effectiveLang = streamLanguage(lang)
         if effectiveLang == "ansi" {
             return try tokenizeAnsi(code, themes: themes)
         }

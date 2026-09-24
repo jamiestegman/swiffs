@@ -271,6 +271,27 @@ public final class Highlighter {
         return tokenizeWithTheme(code, grammar: grammar, theme: theme, colorMap: colorMap, options: options).tokens
     }
 
+    /// `codeToTokensBase` with `grammarState`: starts from `grammarState`
+    /// (the initial state when nil) and returns the state after the last
+    /// line. Plain languages have no grammar state.
+    public func codeToTokensBase(
+        _ code: String,
+        lang: String,
+        theme themeName: String,
+        options: TokenizeOptions = TokenizeOptions(),
+        grammarState: StateStack?
+    ) throws -> (tokens: [[ThemedToken]], grammarState: StateStack?) {
+        if isPlainLang(resolveLangAlias(lang)) || themeName == "none" {
+            return (shikiSplitLines(code).map { [ThemedToken(content: $0.line, offset: $0.offset)] }, nil)
+        }
+        let (theme, colorMap) = try setTheme(themeName)
+        guard let grammar = getGrammar(lang) else {
+            throw DiffsHighlightError("Language `\(lang)` not found, you may need to load it first")
+        }
+        let result = tokenizeWithTheme(code, grammar: grammar, theme: theme, colorMap: colorMap, options: options, initialState: grammarState ?? .initial)
+        return (result.tokens, result.stateStack)
+    }
+
     func tokenizeWithTheme(
         _ code: String,
         grammar: Grammar,

@@ -109,8 +109,8 @@ public final class TextDocument<Annotation> {
 
     /// Text in a range, clamped to visible line content (a goal column past
     /// a line's end must not pull in its line break).
-    public func getText(_ range: TextRange) -> String {
-        (try? pieceTable.getText(TextRange(start: normalizePosition(range.start), end: normalizePosition(range.end)))) ?? ""
+    public func getText(_ range: DocumentRange) -> String {
+        (try? pieceTable.getText(DocumentRange(start: normalizePosition(range.start), end: normalizePosition(range.end)))) ?? ""
     }
 
     public func getLineText(_ line: Int, includeLineBreak: Bool = false) -> String {
@@ -341,7 +341,7 @@ public final class TextDocument<Annotation> {
         let lineCount = pieceTable.lineCount
         return TextDocumentChange(
             changes: edits.enumerated().map { index, edit in
-                EditorChange(start: edit.start, end: edit.end, text: edit.text, range: TextRange(start: editPositions[index * 2], end: editPositions[index * 2 + 1]))
+                EditorChange(start: edit.start, end: edit.end, text: edit.text, range: DocumentRange(start: editPositions[index * 2], end: editPositions[index * 2 + 1]))
             },
             startLine: changed.startLine,
             startCharacter: startPosition.character,

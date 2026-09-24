@@ -135,7 +135,7 @@ public final class PieceTable {
         UTF16Text.string(textUnits())
     }
 
-    public func getText(_ range: TextRange) throws -> String {
+    public func getText(_ range: DocumentRange) throws -> String {
         let start = try offsetAt(range.start)
         let end = try offsetAt(range.end)
         return getTextSlice(start, end)

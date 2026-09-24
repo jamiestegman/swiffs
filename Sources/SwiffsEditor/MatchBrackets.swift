@@ -23,7 +23,7 @@ extension EditorTokenizer: BracketIgnoredRangesProvider {}
 
 /// Ranges of the bracket at the caret and its partner
 /// (`findBracketMatchRanges`).
-public func findBracketMatchRanges<A>(_ document: TextDocument<A>, _ tokenizer: BracketIgnoredRangesProvider, _ position: Position) -> (open: TextRange, close: TextRange)? {
+public func findBracketMatchRanges<A>(_ document: TextDocument<A>, _ tokenizer: BracketIgnoredRangesProvider, _ position: Position) -> (open: DocumentRange, close: DocumentRange)? {
     guard let bracket = findAdjacentBracket(document, tokenizer, document.normalizePosition(position)) else { return nil }
     if let closing = openBrackets[bracket.char] {
         return createBracketMatchRanges(bracket, findClosingBracket(document, tokenizer, bracket, closing))
@@ -128,10 +128,10 @@ private func isCharacterInIgnoredRanges(_ ranges: [(start: Int, end: Int)]?, _ c
     return false
 }
 
-private func createBracketMatchRanges(_ first: BracketPosition?, _ second: BracketPosition?) -> (open: TextRange, close: TextRange)? {
+private func createBracketMatchRanges(_ first: BracketPosition?, _ second: BracketPosition?) -> (open: DocumentRange, close: DocumentRange)? {
     guard let first, let second else { return nil }
-    func range(_ position: BracketPosition) -> TextRange {
-        TextRange(start: Position(line: position.line, character: position.character), end: Position(line: position.line, character: position.character + 1))
+    func range(_ position: BracketPosition) -> DocumentRange {
+        DocumentRange(start: Position(line: position.line, character: position.character), end: Position(line: position.line, character: position.character + 1))
     }
     return (range(first), range(second))
 }

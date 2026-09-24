@@ -95,7 +95,7 @@ public func resolveIndentEdits<A>(_ document: TextDocument<A>, _ selection: Edit
             if deleteLength == 0 { continue }
             newText = ""
         }
-        edits.append(TextEdit(range: TextRange(start: Position(line: line, character: 0), end: Position(line: line, character: deleteLength)), newText: newText))
+        edits.append(TextEdit(range: DocumentRange(start: Position(line: line, character: 0), end: Position(line: line, character: deleteLength)), newText: newText))
         let delta = newText.utf16.count - deleteLength
         if line == start.line {
             newSelection.start = Position(line: start.line, character: max(0, start.character + delta))
@@ -653,7 +653,7 @@ public func isCollapsedSelection(_ selection: EditorSelection) -> Bool {
     selection.start == selection.end
 }
 
-public func isCollapsedRange(_ range: TextRange) -> Bool {
+public func isCollapsedRange(_ range: DocumentRange) -> Bool {
     range.start == range.end
 }
 
@@ -672,7 +672,7 @@ public func comparePosition(_ a: Position, _ b: Position) -> Int {
 }
 
 /// Whether two selections intersect (`selectionIntersects`).
-public func selectionIntersects(_ a: TextRange, _ b: TextRange) -> Bool {
+public func selectionIntersects(_ a: DocumentRange, _ b: DocumentRange) -> Bool {
     let aCollapsed = isCollapsedRange(a)
     let bCollapsed = isCollapsedRange(b)
     if aCollapsed, bCollapsed { return comparePosition(a.start, b.start) == 0 }
@@ -1067,18 +1067,18 @@ private func getSelectionAnchorAndFocusOffsets<A>(_ document: TextDocument<A>, _
     return (document.offsetAt(backward ? selection.end : selection.start), document.offsetAt(getCaretPosition(selection)))
 }
 
-private func resolveDeleteHardLineForwardRange<A>(_ document: TextDocument<A>, _ selection: EditorSelection) -> TextRange {
+private func resolveDeleteHardLineForwardRange<A>(_ document: TextDocument<A>, _ selection: EditorSelection) -> DocumentRange {
     if !isCollapsedSelection(selection) { return selection.range }
     let line = selection.start.line
     let character = selection.start.character
     let lineLength = document.getLineLength(line)
     if character < lineLength {
-        return TextRange(start: selection.start, end: Position(line: line, character: lineLength))
+        return DocumentRange(start: selection.start, end: Position(line: line, character: lineLength))
     }
     if line < document.lineCount - 1 {
-        return TextRange(start: selection.start, end: Position(line: line + 1, character: 0))
+        return DocumentRange(start: selection.start, end: Position(line: line + 1, character: 0))
     }
-    return TextRange(start: selection.start, end: selection.start)
+    return DocumentRange(start: selection.start, end: selection.start)
 }
 
 /// A lone line break copies the current line's indentation

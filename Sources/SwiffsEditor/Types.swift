@@ -20,7 +20,7 @@ public struct Position: Hashable, Sendable, Codable, Comparable {
 }
 
 /// A range between two positions (`Range`).
-public struct TextRange: Hashable, Sendable, Codable {
+public struct DocumentRange: Hashable, Sendable, Codable {
     public var start: Position
     public var end: Position
 
@@ -32,10 +32,10 @@ public struct TextRange: Hashable, Sendable, Codable {
 
 /// An edit addressed by positions (`TextEdit`).
 public struct TextEdit: Hashable, Sendable, Codable {
-    public var range: TextRange
+    public var range: DocumentRange
     public var newText: String
 
-    public init(range: TextRange, newText: String) {
+    public init(range: DocumentRange, newText: String) {
         self.range = range
         self.newText = newText
     }
@@ -63,9 +63,9 @@ public struct EditorChange: Hashable, Sendable, Codable {
     public var end: Int
     public var text: String
     /// The replaced range before the change.
-    public var range: TextRange
+    public var range: DocumentRange
 
-    public init(start: Int, end: Int, text: String, range: TextRange) {
+    public init(start: Int, end: Int, text: String, range: DocumentRange) {
         self.start = start
         self.end = end
         self.text = text
@@ -96,7 +96,7 @@ public struct EditorSelection: Hashable, Sendable, Codable {
         self.init(start: caret, end: caret, direction: .none)
     }
 
-    public var range: TextRange { TextRange(start: start, end: end) }
+    public var range: DocumentRange { DocumentRange(start: start, end: end) }
     public var isCollapsed: Bool { start == end }
     /// The caret (focus) position.
     public var focus: Position { direction == .backward ? start : end }

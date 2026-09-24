@@ -118,7 +118,7 @@ struct EditorFeaturesParityTests {
                 let edit = step["edit"] as! [String: Any]
                 let range = edit["range"] as! [String: Any]
                 deferred.removeAll()
-                let change = try document.applyEdits([TextEdit(range: TextRange(start: Self.position(range["start"]), end: Self.position(range["end"])), newText: edit["newText"] as! String)])!
+                let change = try document.applyEdits([TextEdit(range: DocumentRange(start: Self.position(range["start"]), end: Self.position(range["end"])), newText: edit["newText"] as! String)])!
                 #expect(document.getText() == step["text"] as! String, "\(label) step \(index) text")
                 let dirty = try tokenizer.tokenize(change, renderRange: renderRange)
                 if !Self.same(Self.tokens(dirty), Self.sortedEntries(step["dirty"])) {

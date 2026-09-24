@@ -112,7 +112,7 @@ struct EditorModelParityTests {
         for (actual, object) in zip(change.changes, changes) {
             let range = object["range"] as! [String: Any]
             #expect(actual.start == object["start"] as! Int && actual.end == object["end"] as! Int && actual.text == object["text"] as! String, "\(label) change")
-            #expect(actual.range == TextRange(start: position(range["start"]), end: position(range["end"])), "\(label) change range")
+            #expect(actual.range == DocumentRange(start: position(range["start"]), end: position(range["end"])), "\(label) change range")
         }
     }
 
@@ -128,7 +128,7 @@ struct EditorModelParityTests {
                 case "applyEdits":
                     let edits = (op["edits"] as! [[String: Any]]).map { edit -> TextEdit in
                         let range = edit["range"] as! [String: Any]
-                        return TextEdit(range: TextRange(start: Self.position(range["start"]), end: Self.position(range["end"])), newText: edit["newText"] as! String)
+                        return TextEdit(range: DocumentRange(start: Self.position(range["start"]), end: Self.position(range["end"])), newText: edit["newText"] as! String)
                     }
                     let selections = (op["selectionsBefore"] as? [[String: Any]])?.map(Self.selection)
                     do {

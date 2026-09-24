@@ -120,7 +120,7 @@ public func resolveLineCommentEdits<A>(_ document: TextDocument<A>, _ selections
     if shouldComment {
         for line in lines where !(line.empty && !line.single) {
             let position = Position(line: line.line, character: line.indent)
-            edits.append(TextEdit(range: TextRange(start: position, end: position), newText: token + " "))
+            edits.append(TextEdit(range: DocumentRange(start: position, end: position), newText: token + " "))
         }
         return edits
     }
@@ -129,7 +129,7 @@ public func resolveLineCommentEdits<A>(_ document: TextDocument<A>, _ selections
         let start = line.comment
         let after = start + tokenUnits.count
         let end = after + (after < text.count && text[after] == 0x20 ? 1 : 0)
-        edits.append(TextEdit(range: TextRange(start: Position(line: line.line, character: start), end: Position(line: line.line, character: end)), newText: ""))
+        edits.append(TextEdit(range: DocumentRange(start: Position(line: line.line, character: start), end: Position(line: line.line, character: end)), newText: ""))
     }
     return edits
 }
@@ -308,7 +308,7 @@ public func resolveBlockCommentEdits<A>(_ document: TextDocument<A>, _ selection
         return a.offset < b.offset
     }.map(\.element)
     let edits = offsetEdits.map {
-        TextEdit(range: TextRange(start: document.positionAt($0.start), end: document.positionAt($0.end)), newText: $0.text)
+        TextEdit(range: DocumentRange(start: document.positionAt($0.start), end: document.positionAt($0.end)), newText: $0.text)
     }
     if linewise { return BlockCommentEditResult(edits: edits, nextSelectionOffsets: []) }
     let logical = ranges.map { range -> LogicalRange in

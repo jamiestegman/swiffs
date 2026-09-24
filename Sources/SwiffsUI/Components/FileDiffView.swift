@@ -49,6 +49,9 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
     public var onHunkExpand: ((Int, ExpansionDirection) -> Void)?
     /// Called after rendering (`onPostRender`).
     public var onPostRender: ((FileDiffView<Metadata>) -> Void)?
+    /// Decides whether a completed edit session installs its result
+    /// (`onEditComplete`).
+    public var onEditComplete: ((FileDiffEditCompleteEvent<Metadata>) -> EditCompletionDecision)?
 
     // MARK: Internal state
 
@@ -494,14 +497,36 @@ extension FileDiffView: EditorHost {
         rebuildRows()
     }
 
-    func editorDetach(finalText: String?) {
+    func editorDetach(result: EditorDetachResult, editor: AnyObject) {
         editorSource = nil
-        guard var diff = fileDiff else { return }
-        finishEditSessionForDiff(&diff, options: options.parseDiffOptions)
+        let original = editorOriginalDiff
         editorOriginalHighlight = nil
         editorOriginalDiff = nil
-        let expanded = expandedHunks
-        render(fileDiff: diff, expandedHunks: expanded)
+        if case .complete(_, let annotations) = result, var diff = fileDiff, let original {
+            finishEditSessionForDiff(&diff, options: options.parseDiffOptions)
+            diff.cacheKey = nil
+            let event = FileDiffEditCompleteEvent(
+                fileDiff: diff,
+                editor: editor,
+                originalFileDiff: original,
+                oldFile: diff.type == .new ? nil : FileContents(name: diff.prevName ?? diff.name, contents: diff.deletionLines.joined(), lang: diff.lang),
+                newFile: FileContents(name: diff.name, contents: diff.additionLines.joined(), lang: diff.lang),
+                lineAnnotations: annotations as? [Annotation],
+                originalLineAnnotations: lineAnnotations
+            )
+            (editor as? AnyEditorCompletionObserver)?.observeCompletion(event)
+            if onEditComplete?(event) == .accept {
+                if let annotations = event.lineAnnotations { setLineAnnotations(annotations) }
+                render(fileDiff: diff, expandedHunks: expandedHunks)
+                grid.invalidateLines()
+                return
+            }
+        }
+        // Discard (or rejected completion): restore the input diff.
+        if let original {
+            fileDiff = nil
+            render(fileDiff: original)
+        }
         grid.invalidateLines()
     }
 
@@ -576,3 +601,18 @@ extension FileDiffView: EditorHost {
 
 }
 
+
+/// `onEditComplete` argument for diffs (`FileDiffEditCompleteEvent`).
+public struct FileDiffEditCompleteEvent<Metadata> {
+    /// The recomputed diff of the final contents (no cache key).
+    public var fileDiff: FileDiffMetadata
+    public var editor: AnyObject
+    /// The last diff the view was given; rejecting keeps it.
+    public var originalFileDiff: FileDiffMetadata
+    /// The completed contents as a file pair; `oldFile` is nil for an added
+    /// file.
+    public var oldFile: FileContents?
+    public var newFile: FileContents?
+    public var lineAnnotations: [DiffLineAnnotation<Metadata>]?
+    public var originalLineAnnotations: [DiffLineAnnotation<Metadata>]
+}

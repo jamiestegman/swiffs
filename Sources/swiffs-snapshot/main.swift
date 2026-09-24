@@ -79,6 +79,8 @@ struct Case: Decodable {
     var markers: [[String]]?
     /// A stub prediction: `[line, character, text]` inserted at a position.
     var prediction: [String]?
+    /// Accept completed edit sessions.
+    var acceptEdits: Bool?
 
     struct EditAction: Decodable {
         var type: String
@@ -124,6 +126,7 @@ func run() throws {
         let documentView: DiffsDocumentView
         let getText: () -> String
         let getSelections: () -> [EditorSelection]
+        var finish: (Bool) -> Void = { _ in }
         var keepAlive: AnyObject?
         if let oldFile = testCase.oldFile {
             let diffView = FileDiffView<Void>(options: options)
@@ -135,6 +138,13 @@ func run() throws {
             let editor = DiffsEditor<DiffLineAnnotation<Void>>()
             _ = editor.edit(diffView)
             keepAlive = editor
+            diffView.onEditComplete = { event in
+                print("complete: \(event.newFile?.contents.debugDescription ?? "nil")")
+                return testCase.acceptEdits == true ? .accept : .reject
+            }
+            finish = { complete in
+                if complete { editor.complete() } else { editor.cleanUp(.discard) }
+            }
             getText = { editor.getText() }
             getSelections = { editor.selections }
         } else {
@@ -188,6 +198,10 @@ func run() throws {
                     characters: action.chars ?? "", charactersIgnoringModifiers: action.chars ?? "", isARepeat: false, keyCode: action.keyCode ?? 0
                 )!
                 if !grid.performKeyEquivalent(with: event) { grid.keyDown(with: event) }
+            case "complete":
+                finish(true)
+            case "discard":
+                finish(false)
             case "wait":
                 let deadline = Date().addingTimeInterval(Double(action.text ?? "0.5") ?? 0.5)
                 while Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }

@@ -70,6 +70,65 @@ public struct DiffsSelectionActionContext {
     public var close: () -> Void
 }
 
+/// Why an editor detaches (`cleanUp(reason)`).
+public enum DiffsEditorCleanupReason: Sendable {
+    /// Restore the view's input.
+    case discard
+    /// Detach but keep the keyed edit state for a later attach.
+    case recycle
+    /// Offer the result to the view's `onEditComplete`.
+    case complete
+}
+
+/// A completion handler's decision (`EditCompletionDecision`).
+public enum EditCompletionDecision: Sendable {
+    case accept, reject
+}
+
+/// How a view ends an edit session.
+enum EditorDetachResult {
+    case discard
+    case complete(text: String, annotations: [Any]?)
+}
+
+/// Retained edit state per key (`EditStateManager`): the document with its
+/// history and the selections, so re-attaching resumes the session.
+@MainActor
+public final class DiffsEditStateStore {
+    public static let shared = DiffsEditStateStore()
+
+    struct Entry {
+        var document: AnyObject
+        var selections: [EditorSelection]
+        var fileName: String
+    }
+
+    private var entries: [String: Entry] = [:]
+    private var order: [String] = []
+    public var capacity = 100
+
+    func take(_ key: String) -> Entry? {
+        guard let entry = entries.removeValue(forKey: key) else { return nil }
+        order.removeAll { $0 == key }
+        return entry
+    }
+
+    func store(_ key: String, _ entry: Entry) {
+        entries[key] = entry
+        order.removeAll { $0 == key }
+        order.append(key)
+        while order.count > capacity {
+            entries.removeValue(forKey: order.removeFirst())
+        }
+    }
+
+    /// Drops retained state for a key.
+    public func release(_ key: String) {
+        entries.removeValue(forKey: key)
+        order.removeAll { $0 == key }
+    }
+}
+
 /// Change notification (`EditorChangeEvent`).
 public struct DiffsEditorChangeEvent {
     public var changes: [EditorChange]
@@ -88,7 +147,7 @@ protocol EditorHost: AnyObject {
     /// The host's current (pre-edit) highlighted line.
     func editorOriginalLine(_ index: Int) -> HighlightedLine
     func editorAttach(_ provider: EditorLineSource)
-    func editorDetach(finalText: String?)
+    func editorDetach(result: EditorDetachResult, editor: AnyObject)
     /// Annotations moved by an edit (typed as the host's annotations).
     func editorApplyAnnotations(_ annotations: [Any])
     /// The view that hosts overlays such as the search panel, and the top
@@ -157,8 +216,14 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         case edited(HighlightedLine?)
     }
 
-    public init(options: DiffsEditorOptions = DiffsEditorOptions()) {
+    /// Retains and resumes edit state under this key (`editStateKey`).
+    public let editStateKey: String?
+    /// Observes completion events (`onComplete`).
+    public var onComplete: ((Any) -> Void)?
+
+    public init(options: DiffsEditorOptions = DiffsEditorOptions(), editStateKey: String? = nil) {
         self.options = options
+        self.editStateKey = editStateKey
         compiledKeymap = options.keymap.map(CompiledEditorKeymap.init)
     }
 
@@ -170,6 +235,11 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     public func edit<Metadata>(_ view: FileView<Metadata>) -> () -> Void where Annotation == LineAnnotation<Metadata> {
         attach(view, annotations: view.lineAnnotations)
         return { [weak self] in self?.cleanUp() }
+    }
+
+    /// Ends the session, offering the result to the view's `onEditComplete`.
+    public func complete() {
+        cleanUp(.complete)
     }
 
     /// Starts editing the new side of a diff view.
@@ -185,7 +255,15 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         self.host = host
         fileInfo = FileContents(name: file.name, contents: "", lang: file.lang)
         let lang = file.lang ?? getFiletypeFromFileName(file.name)
-        let document = TextDocument<Annotation>(uri: file.name, text: file.contents, languageId: lang, editStack: EditStack(maxEntries: options.historyMaxEntries))
+        var restoredSelections: [EditorSelection]?
+        let document: TextDocument<Annotation>
+        if let key = editStateKey, let entry = DiffsEditStateStore.shared.take(key), let retained = entry.document as? TextDocument<Annotation>, entry.fileName == file.name {
+            // Resume the retained document and history.
+            document = retained
+            restoredSelections = entry.selections
+        } else {
+            document = TextDocument<Annotation>(uri: file.name, text: file.contents, languageId: lang, editStack: EditStack(maxEntries: options.historyMaxEntries))
+        }
         self.document = document
         lineAnnotations = annotations
         lineStore = (0 ..< document.lineCount).map { .original($0) }
@@ -198,20 +276,36 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         }
         self.tokenizer = tokenizer
         let caret = Position(line: 0, character: 0)
-        selections = [EditorSelection(caret: caret)]
+        selections = restoredSelections ?? [EditorSelection(caret: caret)]
         host.editorAttach(self)
+        if restoredSelections != nil {
+            // The retained document differs from the view's input.
+            lineStore = (0 ..< document.lineCount).map { _ in .edited(nil) }
+            applyTokens(tokenizer.tokenizeLines(0 ..< document.lineCount))
+            host.editorDocumentChanged(nil)
+        }
         host.editorGrid.editorClient = self
         host.editorGrid.rebuildEditorLineRows()
         tokenizer.prebuildStateStack()
     }
 
-    /// Ends editing and restores the view.
-    public func cleanUp() {
+    /// Ends editing (`cleanUp(reason)`).
+    public func cleanUp(_ reason: DiffsEditorCleanupReason = .discard) {
         tokenizer?.cleanUp()
         tokenizer = nil
+        if let key = editStateKey, let document, reason != .complete {
+            DiffsEditStateStore.shared.store(key, .init(document: document, selections: selections, fileName: fileInfo.name))
+        } else if let key = editStateKey {
+            DiffsEditStateStore.shared.release(key)
+        }
         if let host {
             host.editorGrid.editorClient = nil
-            host.editorDetach(finalText: document?.getText())
+            switch reason {
+            case .complete:
+                host.editorDetach(result: .complete(text: document?.getText() ?? "", annotations: lineAnnotations), editor: self)
+            case .discard, .recycle:
+                host.editorDetach(result: .discard, editor: self)
+            }
         }
         host = nil
         document = nil
@@ -1388,4 +1482,10 @@ func editorKeyEvent(from event: NSEvent) -> EditorKeyEvent {
         metaKey: flags.contains(.command),
         shiftKey: flags.contains(.shift)
     )
+}
+
+extension DiffsEditor: AnyEditorCompletionObserver {
+    func observeCompletion(_ event: Any) {
+        onComplete?(event)
+    }
 }

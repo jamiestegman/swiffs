@@ -37,6 +37,9 @@ public final class FileView<Metadata>: DiffsDocumentView {
     public var onLineSelectionChange: ((SelectedLineRange?) -> Void)?
     public var onLineSelectionEnd: ((SelectedLineRange?) -> Void)?
     public var onPostRender: ((FileView<Metadata>) -> Void)?
+    /// Decides whether a completed edit session installs its result
+    /// (`onEditComplete`).
+    public var onEditComplete: ((FileEditCompleteEvent<Metadata>) -> EditCompletionDecision)?
 
     /// Files at or below this many lines highlight synchronously.
     public var synchronousHighlightLineLimit = 600
@@ -293,14 +296,27 @@ extension FileView: EditorHost {
         rebuildRows()
     }
 
-    func editorDetach(finalText: String?) {
+    func editorDetach(result: EditorDetachResult, editor: AnyObject) {
         editorSource = nil
-        if let finalText, let file {
-            // Keep showing the edited contents.
-            render(file: FileContents(name: file.name, contents: finalText, lang: file.lang, cacheKey: nil))
-        } else {
-            rebuildRows()
+        if case .complete(let text, let annotations) = result, let original = file {
+            let completed = FileContents(name: original.name, contents: text, lang: original.lang)
+            let event = FileEditCompleteEvent(
+                file: completed,
+                editor: editor,
+                lineAnnotations: annotations as? [Annotation],
+                originalFile: original,
+                originalLineAnnotations: lineAnnotations
+            )
+            (editor as? AnyEditorCompletionObserver)?.observeCompletion(event)
+            if onEditComplete?(event) == .accept {
+                if let annotations = event.lineAnnotations { setAnnotations(annotations) }
+                render(file: completed)
+                grid.invalidateLines()
+                return
+            }
         }
+        // Discard (or rejected completion): restore the input.
+        rebuildRows()
         grid.invalidateLines()
     }
 
@@ -320,4 +336,22 @@ extension FileView: EditorHost {
         setAnnotations(annotations)
         rebuildRows()
     }
+}
+
+/// `onEditComplete` argument for files (`FileEditCompleteEvent`).
+public struct FileEditCompleteEvent<Metadata> {
+    /// The final contents (no cache key).
+    public var file: FileContents
+    /// The `DiffsEditor` that completed.
+    public var editor: AnyObject
+    public var lineAnnotations: [LineAnnotation<Metadata>]?
+    /// The last input the view was given; rejecting keeps it.
+    public var originalFile: FileContents
+    public var originalLineAnnotations: [LineAnnotation<Metadata>]
+}
+
+/// Lets views forward completion events to `DiffsEditor.onComplete`.
+@MainActor
+protocol AnyEditorCompletionObserver: AnyObject {
+    func observeCompletion(_ event: Any)
 }

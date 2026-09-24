@@ -20,6 +20,30 @@ public struct DiffsEditorOptions {
     public init() {}
 }
 
+/// An externally owned caret or selection shown in the editor
+/// (`EditorCaret`), e.g. a collaborator's cursor.
+public struct DiffsEditorCaret {
+    public var anchor: Position
+    public var focus: Position
+    public var color: NSColor
+
+    public init(anchor: Position, focus: Position, color: NSColor) {
+        self.anchor = anchor
+        self.focus = focus
+        self.color = color
+    }
+}
+
+/// What a selection action view can do (`SelectionActionContext`).
+@MainActor
+public struct DiffsSelectionActionContext {
+    public var selection: EditorSelection
+    public var getSelectionText: () -> String
+    public var replaceSelectionText: (String) -> Void
+    public var applyEdits: ([TextEdit]) -> Void
+    public var close: () -> Void
+}
+
 /// Change notification (`EditorChangeEvent`).
 public struct DiffsEditorChangeEvent {
     public var changes: [EditorChange]
@@ -66,6 +90,9 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     public var onChange: ((DiffsEditorChangeEvent) -> Void)?
     public var onFocus: (() -> Void)?
     public var onBlur: (() -> Void)?
+    /// Renders a floating view after a user-created selection
+    /// (`renderSelectionAction` with `enabledSelectionAction`).
+    public var renderSelectionAction: ((DiffsSelectionActionContext) -> NSView?)?
 
     public private(set) var document: TextDocument<Annotation>?
     public private(set) var selections: [EditorSelection] = []
@@ -82,6 +109,13 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     private var markedText: (text: String, range: DocumentRange)?
     private var dragAnchor: EditorSelection?
     private var reservedSelections: [EditorSelection]?
+    private var carets: [(caret: DiffsEditorCaret, anchorOffset: Int, focusOffset: Int)] = []
+    private var markerPopover: EditorPopoverView?
+    private var markerPopoverIndex: Int?
+    private var pendingMarkerIndex: Int?
+    private var markerShowWork: DispatchWorkItem?
+    private var selectionActionView: EditorPopoverView?
+    private var canMountSelectionAction = false
     private var compiledKeymap: CompiledEditorKeymap?
 
     private enum LineSlot {
@@ -156,6 +190,9 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         searchPanel?.removeFromSuperview()
         searchPanel = nil
         markedText = nil
+        removeMarkerPopover()
+        closeSelectionAction()
+        carets = []
     }
 
     // MARK: - Public API
@@ -191,6 +228,15 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         updateSelections(selections.map {
             EditorSelection(start: document.normalizePosition($0.start), end: document.normalizePosition($0.end), direction: $0.direction)
         })
+    }
+
+    /// Shows externally owned carets (`setCarets`); they follow edits.
+    public func setCarets(_ carets: [DiffsEditorCaret]) {
+        guard let document else { return }
+        self.carets = carets.map { caret in
+            (caret, document.offsetAt(caret.anchor), document.offsetAt(caret.focus))
+        }
+        host?.editorGrid.needsDisplay = true
     }
 
     public func setMarkers(_ markers: [Marker]) {
@@ -303,6 +349,16 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
             lineAnnotations = annotations
             host.editorApplyAnnotations(annotations)
         }
+        for index in carets.indices {
+            let anchor = remapOffsetThroughEdits(carets[index].anchorOffset, change.changes.map { ResolvedTextEdit(start: $0.start, end: $0.end, text: $0.text) })
+            let focus = remapOffsetThroughEdits(carets[index].focusOffset, change.changes.map { ResolvedTextEdit(start: $0.start, end: $0.end, text: $0.text) })
+            carets[index].anchorOffset = anchor
+            carets[index].focusOffset = focus
+            carets[index].caret.anchor = document.positionAt(anchor)
+            carets[index].caret.focus = document.positionAt(focus)
+        }
+        removeMarkerPopover()
+        closeSelectionAction()
         if let dirty = try? tokenizer?.tokenize(change) {
             for (line, tokens) in dirty where line < lineStore.count {
                 lineStore[line] = .edited(makeLine(tokens, text: lineText(line)))
@@ -688,10 +744,17 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         for marker in markers {
             overlays.append(GridEditorOverlay(range: marker.range, kind: .marker(marker.severity)))
         }
+        for entry in carets where entry.caret.anchor != entry.caret.focus {
+            let start = min(entry.caret.anchor, entry.caret.focus)
+            let end = max(entry.caret.anchor, entry.caret.focus)
+            overlays.append(GridEditorOverlay(range: DocumentRange(start: start, end: end), kind: .remoteSelection(entry.caret.color.cgColor)))
+        }
         return overlays
     }
 
-    var editorRemoteCarets: [(position: Position, color: CGColor)] { [] }
+    var editorRemoteCarets: [(position: Position, color: CGColor)] {
+        carets.map { ($0.caret.focus, $0.caret.color.cgColor) }
+    }
 
     var editorSelectionColor: CGColor? {
         tokenizer?.themeColors?.selectionBackground.flatMap { RGBAColor(css: $0) }.map { host!.editorGrid.style.cgColor($0) }
@@ -729,6 +792,8 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
             updateSelections(keyEvent.shiftKey
                 ? mapSelectionShift(document, selections, move, options: moveOptions)
                 : mapCursorMove(document, selections, move, options: moveOptions))
+            canMountSelectionAction = true
+            if keyEvent.shiftKey { showSelectionActionIfNeeded() } else { closeSelectionAction() }
             host?.editorGrid.scrollEditorCaretToVisible()
             return true
         }
@@ -929,6 +994,78 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
     func editorMouseUp() {
         dragAnchor = nil
         reservedSelections = nil
+        canMountSelectionAction = true
+        showSelectionActionIfNeeded()
+    }
+
+    // MARK: - Popovers
+
+    func editorMouseMoved(to position: Position?, point: CGPoint) {
+        guard dragAnchor == nil else { return }
+        let index = position.flatMap { position in
+            markers.firstIndex { marker in
+                marker.start <= position && position <= marker.end && !(marker.start == marker.end)
+            }
+        }
+        if index == markerPopoverIndex { return }
+        markerShowWork?.cancel()
+        guard let index else {
+            let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.removeMarkerPopover() } }
+            markerShowWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+            return
+        }
+        pendingMarkerIndex = index
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.showMarkerPopover(index) } }
+        markerShowWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func showMarkerPopover(_ index: Int) {
+        guard let host, index < markers.count, let anchor = host.editorGrid.editorCaretRect(markers[index].start) else { return }
+        removeMarkerPopover()
+        let marker = markers[index]
+        let popover = EditorPopoverView(content: makeMarkerMessageView(marker.message, source: marker.source))
+        let container = host.editorOverlayContainer
+        popover.place(in: container, anchor: host.editorGrid.convert(anchor, to: container))
+        container.addSubview(popover)
+        markerPopover = popover
+        markerPopoverIndex = index
+    }
+
+    private func removeMarkerPopover() {
+        markerShowWork?.cancel()
+        markerPopover?.removeFromSuperview()
+        markerPopover = nil
+        markerPopoverIndex = nil
+    }
+
+    private func showSelectionActionIfNeeded() {
+        closeSelectionAction()
+        guard canMountSelectionAction, let renderSelectionAction, let host, let document,
+              let primary = selections.last, !primary.isCollapsed
+        else { return }
+        let context = DiffsSelectionActionContext(
+            selection: primary,
+            getSelectionText: { [weak self] in
+                guard let self, let document = self.document else { return "" }
+                return getSelectionText(document, self.selections)
+            },
+            replaceSelectionText: { [weak self] text in self?.replaceSelectionText([text]) },
+            applyEdits: { [weak self] edits in try? self?.applyEdits(edits) },
+            close: { [weak self] in self?.closeSelectionAction() }
+        )
+        guard let content = renderSelectionAction(context), let anchor = host.editorGrid.editorCaretRect(document.normalizePosition(primary.start)) else { return }
+        let popover = EditorPopoverView(content: content)
+        let container = host.editorOverlayContainer
+        popover.place(in: container, anchor: host.editorGrid.convert(anchor, to: container))
+        container.addSubview(popover)
+        selectionActionView = popover
+    }
+
+    private func closeSelectionAction() {
+        selectionActionView?.removeFromSuperview()
+        selectionActionView = nil
     }
 
     func editorFocusChanged(_ focused: Bool) {

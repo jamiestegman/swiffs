@@ -47,6 +47,8 @@ protocol GridEditorClient: AnyObject {
     func editorMouseDragged(to position: Position)
     func editorMouseUp()
     func editorFocusChanged(_ focused: Bool)
+    /// Pointer hover (for marker popovers); `point` is in grid coordinates.
+    func editorMouseMoved(to position: Position?, point: CGPoint)
     func editorPerform(_ action: GridEditorAction)
     func editorCanPerform(_ action: GridEditorAction) -> Bool
 }

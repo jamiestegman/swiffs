@@ -1047,7 +1047,11 @@ final class CodeGridView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        updateHover(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateHover(at: point)
+        if let client = editing.client {
+            client.editorMouseMoved(to: editorPosition(at: point), point: point)
+        }
     }
 
     override func mouseExited(with event: NSEvent) {

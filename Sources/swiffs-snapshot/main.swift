@@ -73,6 +73,10 @@ struct Case: Decodable {
     var drags: [[Double]]?
     /// Editor actions for `kind: "edit"`.
     var editActions: [EditAction]?
+    /// `[anchorLine, anchorChar, focusLine, focusChar]` remote carets.
+    var carets: [[Int]]?
+    /// `[startLine, startChar, endLine, endChar, severity]` markers.
+    var markers: [[String]]?
 
     struct EditAction: Decodable {
         var type: String
@@ -140,6 +144,13 @@ func run() throws {
             fileView.frame = CGRect(x: 0, y: 0, width: width, height: fileView.preferredHeight(forWidth: width))
             let editor = DiffsEditor<LineAnnotation<Void>>()
             _ = editor.edit(fileView)
+            let colors: [NSColor] = [.systemPink, .systemPurple, .systemOrange]
+            editor.setCarets((testCase.carets ?? []).enumerated().map { index, c in
+                DiffsEditorCaret(anchor: Position(line: c[0], character: c[1]), focus: Position(line: c[2], character: c[3]), color: colors[index % colors.count])
+            })
+            editor.setMarkers((testCase.markers ?? []).map { m in
+                Marker(start: Position(line: Int(m[0])!, character: Int(m[1])!), end: Position(line: Int(m[2])!, character: Int(m[3])!), severity: MarkerSeverity(rawValue: m[4]) ?? .error, message: "problem")
+            })
             keepAlive = editor
             getText = { editor.getText() }
             getSelections = { editor.selections }

@@ -43,6 +43,33 @@ struct HighlightParityTests {
         return highlighter
     }
 
+    /// One tokenization resolving every theme must match Shiki's separate
+    /// per-theme runs.
+    @Test func singlePassMultiThemeTokensMatchShiki() throws {
+        let cases = try Self.loadCases()
+        let highlighter = try Self.makeHighlighter(langs: cases.map(\.lang), themes: cases[0].themes)
+        var mismatches: [String] = []
+        for testCase in cases where !isPlainLang(testCase.lang) {
+            guard let grammar = highlighter.getGrammar(testCase.lang) else { continue }
+            let options = TokenizeOptions(tokenizeMaxLineLength: testCase.name == "long-line" ? 120 : 0, tokenizeTimeLimit: 0)
+            // Rotate so every theme is resolved both as the primary and as an
+            // extra theme.
+            for rotation in testCase.themes.indices {
+                let themes = Array(testCase.themes[rotation...] + testCase.themes[..<rotation])
+                let perTheme = try highlighter.tokenizeWithThemes(testCase.code, grammar: grammar, themeNames: themes, options: options)
+                for (index, theme) in themes.enumerated() {
+                    let actual: [[[JSONValue]]] = perTheme[index].map { line in
+                        line.map { [.int($0.content.utf16.count), $0.color.map { .string($0) } ?? .null, .int($0.fontStyle.rawValue)] }
+                    }
+                    if actual != testCase.expected[theme]! {
+                        mismatches.append("\(testCase.name) [\(testCase.lang)/\(theme)] rotation \(rotation)")
+                    }
+                }
+            }
+        }
+        #expect(mismatches.isEmpty, "\(mismatches.count) mismatches: \(mismatches.prefix(12))")
+    }
+
     @Test func tokensMatchShiki() throws {
         let cases = try Self.loadCases()
         let highlighter = try Self.makeHighlighter(langs: cases.map(\.lang), themes: cases[0].themes)

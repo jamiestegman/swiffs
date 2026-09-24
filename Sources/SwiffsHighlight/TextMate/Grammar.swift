@@ -145,15 +145,19 @@ final class AttributedScopeStack {
     let parent: AttributedScopeStack?
     let scopePath: ScopeStack
     let tokenAttributes: UInt32
+    /// Roots only: whether the root scope was looked up in the theme
+    /// (`createRootAndLookUpScopeName`) rather than created as-is.
+    let lookedUpRoot: Bool
 
-    init(_ parent: AttributedScopeStack?, _ scopePath: ScopeStack, _ tokenAttributes: UInt32) {
+    init(_ parent: AttributedScopeStack?, _ scopePath: ScopeStack, _ tokenAttributes: UInt32, lookedUpRoot: Bool = true) {
         self.parent = parent
         self.scopePath = scopePath
         self.tokenAttributes = tokenAttributes
+        self.lookedUpRoot = lookedUpRoot
     }
 
     static func createRoot(_ scopeName: String, _ tokenAttributes: UInt32) -> AttributedScopeStack {
-        AttributedScopeStack(nil, ScopeStack(nil, scopeName), tokenAttributes)
+        AttributedScopeStack(nil, ScopeStack(nil, scopeName), tokenAttributes, lookedUpRoot: false)
     }
 
     static func createRootAndLookUpScopeName(_ scopeName: String, _ tokenAttributes: UInt32, _ grammar: Grammar) -> AttributedScopeStack {
@@ -357,9 +361,25 @@ final class LineTokens {
         produceFromScopes(stack.contentNameScopesList, endIndex)
     }
 
+    /// Unmerged tokens with their scopes, recorded for resolving other themes
+    /// from one tokenization.
+    var scopeTokens: [(start: Int, scopes: AttributedScopeStack?)]?
+
     func produceFromScopes(_ scopesList: AttributedScopeStack?, _ endIndex: Int) {
         if lastTokenEndIndex >= endIndex { return }
-        var metadata = scopesList?.tokenAttributes ?? 0
+        scopeTokens?.append((lastTokenEndIndex, scopesList))
+        let metadata = applyBalancedBrackets(scopesList?.tokenAttributes ?? 0, scopesList)
+        if let last = binaryTokens.last, last == metadata {
+            lastTokenEndIndex = endIndex
+            return
+        }
+        binaryTokens.append(UInt32(truncatingIfNeeded: lastTokenEndIndex))
+        binaryTokens.append(metadata)
+        lastTokenEndIndex = endIndex
+    }
+
+    func applyBalancedBrackets(_ metadata: UInt32, _ scopesList: AttributedScopeStack?) -> UInt32 {
+        var metadata = metadata
         var containsBalancedBrackets = false
         if balancedBracketSelectors?.matchesAlways == true {
             containsBalancedBrackets = true
@@ -379,13 +399,7 @@ final class LineTokens {
                 background: 0
             )
         }
-        if let last = binaryTokens.last, last == metadata {
-            lastTokenEndIndex = endIndex
-            return
-        }
-        binaryTokens.append(UInt32(truncatingIfNeeded: lastTokenEndIndex))
-        binaryTokens.append(metadata)
-        lastTokenEndIndex = endIndex
+        return metadata
     }
 
     func getBinaryResult(_ stack: StateStack, _ lineLength: Int) -> [UInt32] {
@@ -399,6 +413,40 @@ final class LineTokens {
             binaryTokens[binaryTokens.count - 2] = 0
         }
         return binaryTokens
+    }
+}
+
+/// Recomputes `AttributedScopeStack` attributes under another theme, along
+/// the same scope chain (`createRootAndLookUpScopeName` / `pushAttributed`).
+final class ThemeAttributeResolver {
+    private let theme: TextMateTheme
+    private let defaultMetadata: UInt32
+    private let basicAttributes: (String) -> BasicScopeAttributes
+    /// Keyed by stack identity; holding the stack keeps the key unique.
+    private var memo: [ObjectIdentifier: (stack: AttributedScopeStack, attributes: UInt32)] = [:]
+
+    init(theme: TextMateTheme, defaultMetadata: UInt32, basicAttributes: @escaping (String) -> BasicScopeAttributes) {
+        self.theme = theme
+        self.defaultMetadata = defaultMetadata
+        self.basicAttributes = basicAttributes
+    }
+
+    var colorMap: [String] { theme.getColorMap() }
+
+    func attributes(_ stack: AttributedScopeStack?) -> UInt32 {
+        guard let stack else { return 0 }
+        let key = ObjectIdentifier(stack)
+        if let cached = memo[key] { return cached.attributes }
+        let resolved: UInt32
+        if let parent = stack.parent {
+            resolved = AttributedScopeStack.mergeAttributes(attributes(parent), basicAttributes(stack.scopeName), theme.match(stack.scopePath))
+        } else if stack.lookedUpRoot {
+            resolved = AttributedScopeStack.mergeAttributes(defaultMetadata, basicAttributes(stack.scopeName), theme.match(stack.scopePath))
+        } else {
+            resolved = defaultMetadata
+        }
+        memo[key] = (stack, resolved)
+        return resolved
     }
 }
 
@@ -549,7 +597,59 @@ public final class Grammar: RuleRegistry {
         )
     }
 
-    private func tokenize(_ lineText: String, _ prevState: StateStack?, _ timeLimit: Double) -> (lineLength: Int, lineTokens: LineTokens, ruleStack: StateStack, stoppedEarly: Bool) {
+    /// Tokenizes a line once for the active theme and resolves the binary
+    /// tokens of `extraThemes` from the same scopes. Rule matching does not
+    /// depend on the theme, so each extra result equals a separate
+    /// `tokenizeLine2` under that theme.
+    func tokenizeLine2(_ lineText: String, _ prevState: StateStack?, timeLimit: Double = 0, extraThemes: [ThemeAttributeResolver]) -> (primary: TokenizeLineResult, extra: [[UInt32]]) {
+        let r = tokenize(lineText, prevState, timeLimit, recordScopes: true)
+        let scopeTokens = r.lineTokens.scopeTokens ?? []
+        let primary = TokenizeLineResult(
+            tokens: r.lineTokens.getBinaryResult(r.ruleStack, r.lineLength),
+            ruleStack: r.ruleStack,
+            stoppedEarly: r.stoppedEarly
+        )
+        let extra = extraThemes.map { resolver -> [UInt32] in
+            var tokens: [UInt32] = []
+            tokens.reserveCapacity(scopeTokens.count * 2)
+            for (start, scopes) in scopeTokens {
+                let metadata = r.lineTokens.applyBalancedBrackets(resolver.attributes(scopes), scopes)
+                if let last = tokens.last, last == metadata { continue }
+                tokens.append(UInt32(truncatingIfNeeded: start))
+                tokens.append(metadata)
+            }
+            // `getBinaryResult`.
+            if tokens.count >= 2, tokens[tokens.count - 2] == UInt32(truncatingIfNeeded: r.lineLength - 1) {
+                tokens.removeLast(2)
+            }
+            if tokens.isEmpty {
+                let scopes = r.ruleStack.contentNameScopesList
+                tokens = [0, r.lineTokens.applyBalancedBrackets(resolver.attributes(scopes), scopes)]
+            }
+            return tokens
+        }
+        return (primary, extra)
+    }
+
+    /// Resolves token attributes under another theme.
+    func attributeResolver(for theme: TextMateTheme) -> ThemeAttributeResolver {
+        let raw = basicScopeAttributesProvider.defaultAttributes
+        let defaults = theme.defaults
+        let defaultMetadata = EncodedTokenMetadata.set(
+            0,
+            languageId: raw.languageId,
+            tokenType: raw.tokenType,
+            containsBalancedBrackets: nil,
+            fontStyle: defaults.fontStyle,
+            foreground: defaults.foregroundId,
+            background: defaults.backgroundId
+        )
+        return ThemeAttributeResolver(theme: theme, defaultMetadata: defaultMetadata) { [unowned self] scope in
+            self.getMetadataForScope(scope)
+        }
+    }
+
+    private func tokenize(_ lineText: String, _ prevState: StateStack?, _ timeLimit: Double, recordScopes: Bool = false) -> (lineLength: Int, lineTokens: LineTokens, ruleStack: StateStack, stoppedEarly: Bool) {
         if rootId == -1 {
             rootId = RuleFactory.getCompiledRuleId(grammar.selfRule, self, grammar.repository)
             _ = getInjections()
@@ -585,6 +685,7 @@ public final class Grammar: RuleRegistry {
         let onigLineText = OnigString(lineText + "\n")
         let lineLength = onigLineText.utf16Length
         let lineTokens = LineTokens(balancedBracketSelectors: balancedBracketSelectors)
+        if recordScopes { lineTokens.scopeTokens = [] }
         let r = tokenizeString(self, onigLineText, isFirstLine, 0, state, lineTokens, checkWhileConditions: true, timeLimit: timeLimit)
         return (lineLength, lineTokens, r.stack, r.stoppedEarly)
     }

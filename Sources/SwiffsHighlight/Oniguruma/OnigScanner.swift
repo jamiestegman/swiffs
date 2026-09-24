@@ -140,12 +140,14 @@ public final class OnigScanner {
         }
 
         deinit {
+            // The regex itself is freed with the scanner's regset.
             onig_region_free(region, 1)
-            onig_free(regex)
         }
     }
 
     private let regexes: [Regex]
+    /// All patterns, searched together for short strings.
+    private let regset: OpaquePointer?
     public let patterns: [String]
 
     public init(patterns: [String]) throws {
@@ -182,6 +184,25 @@ public final class OnigScanner {
             compiled.append(Regex(regex: regex, hasGAnchor: Self.hasGAnchor(bytes)))
         }
         regexes = compiled
+        var regs: [OnigRegex?] = compiled.map(\.regex)
+        var set: OpaquePointer?
+        let status = regs.withUnsafeMutableBufferPointer { buffer in
+            onig_regset_new(&set, Int32(buffer.count), buffer.baseAddress)
+        }
+        if status == ONIG_NORMAL {
+            regset = set
+        } else {
+            // Keep ownership with the scanner; free individually on deinit.
+            regset = nil
+        }
+    }
+
+    deinit {
+        if let regset {
+            onig_regset_free(regset)
+        } else {
+            for regex in regexes { onig_free(regex.regex) }
+        }
     }
 
     private static func hasGAnchor(_ bytes: [UInt8]) -> Bool {
@@ -205,6 +226,14 @@ public final class OnigScanner {
             var empty: UInt8 = 0
             let base = buffer.baseAddress ?? withUnsafeMutablePointer(to: &empty) { UnsafePointer($0) }
             let length = buffer.count
+            // vscode-oniguruma: the RegSet API is faster for short strings;
+            // for longer ones per-pattern caching pays off.
+            if length < 1000, let regset = self.regset {
+                var matchPosition: Int32 = 0
+                let index = onig_regset_search(regset, base, base + length, base + position, base + length, ONIG_REGSET_POSITION_LEAD, onigOptions, &matchPosition)
+                guard index >= 0, let region = onig_regset_get_region(regset, index) else { return nil }
+                return makeMatch(Int(index), region.pointee, string)
+            }
             var bestLocation = 0
             var bestIndex = -1
             for (index, regex) in regexes.enumerated() {
@@ -219,19 +248,22 @@ public final class OnigScanner {
                 if location == position { break }
             }
             guard bestIndex >= 0 else { return nil }
-            let region = regexes[bestIndex].region.pointee
-            var captures: [OnigCaptureIndex] = []
-            captures.reserveCapacity(Int(region.num_regs))
-            for i in 0 ..< Int(region.num_regs) {
-                let beg = Int(region.beg[i])
-                let end = Int(region.end[i])
-                captures.append(OnigCaptureIndex(
-                    start: string.convertUtf8OffsetToUtf16(beg),
-                    end: string.convertUtf8OffsetToUtf16(end)
-                ))
-            }
-            return OnigMatch(index: bestIndex, captureIndices: captures)
+            return makeMatch(bestIndex, regexes[bestIndex].region.pointee, string)
         }
+    }
+
+    private func makeMatch(_ index: Int, _ region: OnigRegion, _ string: OnigString) -> OnigMatch {
+        var captures: [OnigCaptureIndex] = []
+        captures.reserveCapacity(Int(region.num_regs))
+        for i in 0 ..< Int(region.num_regs) {
+            let beg = Int(region.beg[i])
+            let end = Int(region.end[i])
+            captures.append(OnigCaptureIndex(
+                start: string.convertUtf8OffsetToUtf16(beg),
+                end: string.convertUtf8OffsetToUtf16(end)
+            ))
+        }
+        return OnigMatch(index: index, captureIndices: captures)
     }
 
     private func search(

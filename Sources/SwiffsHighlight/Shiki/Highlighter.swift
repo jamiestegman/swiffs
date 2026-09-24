@@ -319,32 +319,82 @@ public final class Highlighter {
                 continue
             }
             let result = grammar.tokenizeLine2(line, stateStack, timeLimit: options.tokenizeTimeLimit)
-            let tokensLength = result.tokens.count / 2
-            let units = Array(line.utf16)
-            var actual: [ThemedToken] = []
-            actual.reserveCapacity(tokensLength)
-            for j in 0 ..< tokensLength {
-                let startIndex = Int(result.tokens[2 * j])
-                let nextStartIndex = j + 1 < tokensLength ? Int(result.tokens[2 * j + 2]) : lineLength
-                if startIndex == nextStartIndex { continue }
-                let metadata = result.tokens[2 * j + 1]
-                let colorId = EncodedTokenMetadata.getForeground(metadata)
-                let rawColor: String? = colorId < colorMap.count && !colorMap[colorId].isEmpty ? colorMap[colorId] : nil
-                let color = applyColorReplacements(rawColor, colorReplacements)
-                let fontStyle = FontStyle(rawValue: EncodedTokenMetadata.getFontStyle(metadata))
-                let start = min(startIndex, units.count)
-                let end = min(max(nextStartIndex, start), units.count)
-                actual.append(ThemedToken(
-                    content: String(decoding: units[start ..< end], as: UTF16.self),
-                    offset: lineOffset + startIndex,
-                    color: color,
-                    fontStyle: fontStyle
-                ))
-            }
-            final.append(actual)
+            final.append(Self.themedTokens(result.tokens, units: Array(line.utf16), lineOffset: lineOffset, colorMap: colorMap, colorReplacements: colorReplacements))
             stateStack = result.ruleStack
         }
         return (final, stateStack)
+    }
+
+    /// Shiki's per-line conversion of binary tokens to themed tokens.
+    private static func themedTokens(_ tokens: [UInt32], units: [UInt16], lineOffset: Int, colorMap: [String], colorReplacements: [String: String]) -> [ThemedToken] {
+        let lineLength = units.count
+        let tokensLength = tokens.count / 2
+        var actual: [ThemedToken] = []
+        actual.reserveCapacity(tokensLength)
+        for j in 0 ..< tokensLength {
+            let startIndex = Int(tokens[2 * j])
+            let nextStartIndex = j + 1 < tokensLength ? Int(tokens[2 * j + 2]) : lineLength
+            if startIndex == nextStartIndex { continue }
+            let metadata = tokens[2 * j + 1]
+            let colorId = EncodedTokenMetadata.getForeground(metadata)
+            let rawColor: String? = colorId < colorMap.count && !colorMap[colorId].isEmpty ? colorMap[colorId] : nil
+            let color = applyColorReplacements(rawColor, colorReplacements)
+            let fontStyle = FontStyle(rawValue: EncodedTokenMetadata.getFontStyle(metadata))
+            let start = min(startIndex, units.count)
+            let end = min(max(nextStartIndex, start), units.count)
+            actual.append(ThemedToken(
+                content: String(decoding: units[start ..< end], as: UTF16.self),
+                offset: lineOffset + startIndex,
+                color: color,
+                fontStyle: fontStyle
+            ))
+        }
+        return actual
+    }
+
+    /// `tokenizeWithTheme` for several themes from one tokenization: the
+    /// grammar runs once under the first theme, and the other themes resolve
+    /// colors from the same scopes. Equivalent to one run per theme.
+    func tokenizeWithThemes(_ code: String, grammar: Grammar, themeNames: [String], options: TokenizeOptions) throws -> [[[ThemedToken]]] {
+        guard let firstName = themeNames.first else { return [] }
+        var entries: [(theme: ThemeRegistration, textmate: TextMateTheme, replacements: [String: String])] = []
+        for name in themeNames {
+            let theme = try getTheme(name)
+            let textmate: TextMateTheme
+            if let cached = textmateThemes[name] {
+                textmate = cached
+            } else {
+                textmate = TextMateTheme.createFromRawTheme(theme.settings)
+                textmateThemes[name] = textmate
+            }
+            var replacements = theme.colorReplacements
+            for (key, value) in options.colorReplacements { replacements[key] = value }
+            entries.append((theme, textmate, replacements))
+        }
+        let (_, primaryColorMap) = try setTheme(firstName)
+        let resolvers = entries.dropFirst().map { grammar.attributeResolver(for: $0.textmate) }
+        let colorMaps = [primaryColorMap] + resolvers.map(\.colorMap)
+        let lines = shikiSplitLines(code)
+        var results: [[[ThemedToken]]] = entries.map { _ in [] }
+        var stateStack = StateStack.initial
+        for (line, lineOffset) in lines {
+            if line.isEmpty {
+                for index in results.indices { results[index].append([]) }
+                continue
+            }
+            if options.tokenizeMaxLineLength > 0, line.utf16.count >= options.tokenizeMaxLineLength {
+                for index in results.indices { results[index].append([ThemedToken(content: line, offset: lineOffset, color: "", fontStyle: [])]) }
+                continue
+            }
+            let result = grammar.tokenizeLine2(line, stateStack, timeLimit: options.tokenizeTimeLimit, extraThemes: Array(resolvers))
+            let units = Array(line.utf16)
+            let perTheme = [result.primary.tokens] + result.extra
+            for index in results.indices {
+                results[index].append(Self.themedTokens(perTheme[index], units: units, lineOffset: lineOffset, colorMap: colorMaps[index], colorReplacements: entries[index].replacements))
+            }
+            stateStack = result.primary.ruleStack
+        }
+        return results
     }
 
     /// Shiki `codeToTokensWithThemes`: tokenizes with each theme and aligns
@@ -356,8 +406,13 @@ public final class Highlighter {
         themes: [(slot: String, theme: String)],
         options: TokenizeOptions = TokenizeOptions()
     ) throws -> [[ThemedTokenWithVariants]] {
-        let themed = try themes.map { entry in
-            try codeToTokensBase(code, lang: lang, theme: entry.theme, options: options)
+        let themed: [[[ThemedToken]]]
+        if !isPlainLang(resolveLangAlias(lang)), !themes.contains(where: { $0.theme == "none" }), let grammar = getGrammar(lang) {
+            themed = try tokenizeWithThemes(code, grammar: grammar, themeNames: themes.map(\.theme), options: options)
+        } else {
+            themed = try themes.map { entry in
+                try codeToTokensBase(code, lang: lang, theme: entry.theme, options: options)
+            }
         }
         let aligned = alignThemesTokenization(themed)
         guard let first = aligned.first else { return [] }

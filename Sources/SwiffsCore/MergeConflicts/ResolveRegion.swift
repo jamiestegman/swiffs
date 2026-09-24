@@ -334,11 +334,7 @@ public func getMergeConflictParseResult(_ lines: [String]) -> MergeConflictParse
     var stack: [Frame] = []
     var regions: [MergeConflictRegion] = []
     for (index, rawLine) in lines.enumerated() {
-        // `line.replace(/(?:\r\n|\n|\r)$/, '')`
-        var line = rawLine
-        if line.hasSuffix("\r\n") || line.hasSuffix("\n") || line.hasSuffix("\r") {
-            line = String(line.unicodeScalars.dropLast(line.hasSuffix("\r\n") ? 2 : 1))
-        }
+        let line = trimTrailingLineEnding(rawLine)
         if test(startMarkerRegex, line) {
             stack.append(Frame(stage: .current, startLineIndex: index))
             lineTypes.append(.markerStart)

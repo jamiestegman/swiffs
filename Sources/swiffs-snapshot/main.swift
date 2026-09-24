@@ -12,6 +12,7 @@
 
 import AppKit
 import SwiffsCore
+import SwiffsEditor
 import SwiffsHighlight
 import SwiffsUI
 
@@ -70,6 +71,19 @@ struct Case: Decodable {
     var clicks: [[Double]]?
     /// Drags `[x0, y0, x1, y1, clickCount?]`; the selected text is printed.
     var drags: [[Double]]?
+    /// Editor actions for `kind: "edit"`.
+    var editActions: [EditAction]?
+
+    struct EditAction: Decodable {
+        var type: String
+        var text: String?
+        var keyCode: UInt16?
+        var chars: String?
+        var mods: [String]?
+        var x: Double?
+        var y: Double?
+        var clickCount: Int?
+    }
 }
 
 @MainActor
@@ -100,7 +114,61 @@ func run() throws {
 
     let view: NSView
     let preferredHeight: (CGFloat) -> CGFloat
-    if testCase.kind == "stream", let file = testCase.file {
+    if testCase.kind == "edit", let file = testCase.file {
+        let fileView = FileView<Void>(options: options.code)
+        fileView.appearance = appearance
+        fileView.synchronousHighlightLineLimit = .max
+        fileView.render(file: file)
+        fileView.frame = CGRect(x: 0, y: 0, width: width, height: fileView.preferredHeight(forWidth: width))
+        let window = NSWindow(contentRect: fileView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = fileView
+        let editor = DiffsEditor<Void>()
+        _ = editor.edit(fileView)
+        editor.focus()
+        guard let grid = window.firstResponder as? NSView else { fatalError("no first responder") }
+        for action in testCase.editActions ?? [] {
+            switch action.type {
+            case "text":
+                (grid as? NSTextInputClient)?.insertText(action.text ?? "", replacementRange: NSRange(location: NSNotFound, length: 0))
+            case "key":
+                var flags: NSEvent.ModifierFlags = []
+                for mod in action.mods ?? [] {
+                    switch mod {
+                    case "shift": flags.insert(.shift)
+                    case "cmd": flags.insert(.command)
+                    case "alt": flags.insert(.option)
+                    case "ctrl": flags.insert(.control)
+                    default: break
+                    }
+                }
+                let event = NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                    characters: action.chars ?? "", charactersIgnoringModifiers: action.chars ?? "", isARepeat: false, keyCode: action.keyCode ?? 0
+                )!
+                if !grid.performKeyEquivalent(with: event) { grid.keyDown(with: event) }
+            case "click":
+                let height = fileView.frame.height
+                let location = grid.convert(CGPoint(x: action.x ?? 0, y: action.y ?? 0), from: fileView)
+                _ = height
+                let windowPoint = grid.convert(location, to: nil)
+                let event = NSEvent.mouseEvent(
+                    with: .leftMouseDown, location: windowPoint, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: action.clickCount ?? 1, pressure: 1
+                )!
+                grid.mouseDown(with: event)
+                grid.mouseUp(with: event)
+            default:
+                break
+            }
+            fileView.frame.size.height = fileView.preferredHeight(forWidth: width)
+            window.setContentSize(fileView.frame.size)
+            fileView.layoutSubtreeIfNeeded()
+        }
+        print("text: \(editor.getText().debugDescription)")
+        print("selections: \(editor.selections.map { "\($0.start.line):\($0.start.character)-\($0.end.line):\($0.end.character)" })")
+        view = fileView
+        preferredHeight = fileView.preferredHeight(forWidth:)
+    } else if testCase.kind == "stream", let file = testCase.file {
         let streamView = FileStreamView(options: FileStreamOptions(code: options.code, lang: testCase.lang))
         streamView.appearance = appearance
         var closed = false

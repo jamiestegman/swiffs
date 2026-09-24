@@ -130,7 +130,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         grid.setSelectedRange(range)
     }
 
-    public var selectedLines: SelectedLineRange? { grid.selectedRange }
+    public var selectedLines: SelectedLineRange? { grid.lineSelectionRange }
 
     /// The line under the gutter utility / pointer (`getHoveredLine`).
     public var hoveredLine: DiffsHoveredLine? {

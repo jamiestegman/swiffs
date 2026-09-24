@@ -85,8 +85,10 @@ final class CodeGridView: NSView {
     private var hoveredMergeAction: GridHit?
     /// Native text selection (see `CodeGridView+TextSelection.swift`).
     var textSelection: GridTextSelection?
+    /// Editor state (see `CodeGridView+Editing.swift`).
+    let editing = GridEditingState()
     private var textDrag: (column: Int, lower: GridTextPosition, upper: GridTextPosition, granularity: TextSelectionGranularity, moved: Bool)?
-    private(set) var selectedRange: SelectedLineRange?
+    private(set) var lineSelectionRange: SelectedLineRange?
     private var proposedRange: SelectedLineRange??
     private var selectionAnchor: SelectionPoint?
     private var pointerSession: PointerSession = .idle
@@ -151,6 +153,7 @@ final class CodeGridView: NSView {
         }
         layoutWidth = -1
         relayout(width: bounds.width)
+        if isEditing { rebuildEditorLineRows() }
         needsDisplay = true
     }
 
@@ -179,7 +182,7 @@ final class CodeGridView: NSView {
     }
 
     func setSelectedRange(_ range: SelectedLineRange?) {
-        selectedRange = range
+        lineSelectionRange = range
         proposedRange = nil
         needsDisplay = true
     }
@@ -550,7 +553,9 @@ final class CodeGridView: NSView {
                 context.fill(selectionRects)
                 context.restoreGState()
             }
+            if isEditing { drawEditorBackground(line: line, row: row, column: columnIndex, contentRect: contentRect, context: context) }
             drawLineText(line, column: column, top: top, contentRect: contentRect, context: context)
+            if isEditing { drawEditorForeground(line: line, row: row, column: columnIndex, contentRect: contentRect, context: context) }
             fill(gutterRect, palette.background(for: .lineNumber, state: numberState), context)
             drawIndicator(for: visualType, gutterRect: gutterRect, contentRect: contentRect, context: context)
             if !options.disableLineNumbers {
@@ -968,7 +973,7 @@ final class CodeGridView: NSView {
 
     private var currentSelectionRange: SelectedLineRange? {
         if let proposedRange { return proposedRange }
-        return selectedRange
+        return lineSelectionRange
     }
 
     private func cell(row: Int, column: Int) -> RenderCell? {
@@ -1140,7 +1145,7 @@ final class CodeGridView: NSView {
             let interactiveLines = delegate?.gridHandlesLineClicks ?? false
             if (numberColumn && interactiveNumbers) || (!numberColumn && interactiveLines) {
                 NSCursor.pointingHand.set()
-            } else if !numberColumn {
+            } else if !numberColumn || isEditing {
                 NSCursor.iBeam.set()
             } else {
                 NSCursor.arrow.set()
@@ -1194,7 +1199,7 @@ final class CodeGridView: NSView {
             return
         case .line(_, _, _, let numberColumn) where numberColumn && options.enableLineSelection:
             guard let (point, rowIndex) = selectionPoint(for: hit) else { return }
-            if event.modifierFlags.contains(.shift), let range = selectedRange,
+            if event.modifierFlags.contains(.shift), let range = lineSelectionRange,
                let startIndex = rowIndexes(for: SelectionPoint(lineNumber: range.start, side: range.side)),
                let endIndex = rowIndexes(for: SelectionPoint(lineNumber: range.end, side: range.endSide ?? range.side))
             {
@@ -1207,7 +1212,7 @@ final class CodeGridView: NSView {
                 pointerSession = .selecting
                 return
             }
-            if selectedRange?.start == point.lineNumber, selectedRange?.end == point.lineNumber {
+            if lineSelectionRange?.start == point.lineNumber, lineSelectionRange?.end == point.lineNumber {
                 selectionAnchor = point
                 pointerSession = .pendingSingleLineUnselect(anchor: point)
                 return
@@ -1215,14 +1220,33 @@ final class CodeGridView: NSView {
             if controlledSelection {
                 proposedRange = .some(nil)
             } else {
-                selectedRange = nil
+                lineSelectionRange = nil
             }
             selectionAnchor = point
             updateSelection(to: point, emitChange: false)
             delegate?.grid(self, selectionEvent: currentSelectionRange, phase: .start)
             pointerSession = .selecting
         case .line(_, let columnIndex, _, false):
+            if let client = editing.client, let position = editorPosition(at: point) {
+                window?.makeFirstResponder(self)
+                editing.isDragging = true
+                client.editorMouseDown(at: position, clickCount: event.clickCount, modifiers: event.modifierFlags)
+                restartCaretBlink()
+                return
+            }
             beginTextDrag(at: point, column: columnIndex, clickCount: event.clickCount, extend: event.modifierFlags.contains(.shift))
+        case .none, .annotation:
+            // While editing, clicks on empty space place the caret at the
+            // nearest editable position.
+            if let client = editing.client, case .none = hit, let position = editorPosition(at: point) {
+                window?.makeFirstResponder(self)
+                editing.isDragging = true
+                client.editorMouseDown(at: position, clickCount: event.clickCount, modifiers: event.modifierFlags)
+                restartCaretBlink()
+                return
+            }
+            clearTextSelection()
+            super.mouseDown(with: event)
         default:
             clearTextSelection()
             super.mouseDown(with: event)
@@ -1267,6 +1291,10 @@ final class CodeGridView: NSView {
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         autoscroll(with: event)
+        if editing.isDragging, let client = editing.client {
+            if let position = editorPosition(at: point) { client.editorMouseDragged(to: position) }
+            return
+        }
         if textDrag != nil {
             extendTextDrag(to: point)
             return
@@ -1306,6 +1334,11 @@ final class CodeGridView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if editing.isDragging {
+            editing.isDragging = false
+            editing.client?.editorMouseUp()
+            return
+        }
         if let drag = textDrag {
             textDrag = nil
             if drag.moved {
@@ -1389,7 +1422,7 @@ final class CodeGridView: NSView {
         if controlledSelection {
             proposedRange = .some(next)
         } else {
-            selectedRange = next
+            lineSelectionRange = next
         }
         needsDisplay = true
         if emitChange {
@@ -1424,6 +1457,65 @@ final class CodeGridView: NSView {
     // MARK: - Copy
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted, let client = editing.client {
+            editing.isFocused = true
+            client.editorFocusChanged(true)
+            restartCaretBlink()
+            needsDisplay = true
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned, let client = editing.client {
+            editing.isFocused = false
+            stopCaretBlink()
+            client.editorFocusChanged(false)
+            needsDisplay = true
+        }
+        return resigned
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard let client = editing.client else {
+            super.keyDown(with: event)
+            return
+        }
+        restartCaretBlink()
+        if client.editorMarkedText != nil {
+            if inputContext?.handleEvent(event) == true { return }
+        }
+        if client.editorKeyDown(event) { return }
+        interpretKeyEvents([event])
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let client = editing.client, window?.firstResponder === self, client.editorKeyDown(event) {
+            restartCaretBlink()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    @objc func cut(_ sender: Any?) {
+        editing.client?.editorPerform(.cut)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        editing.client?.editorPerform(.paste)
+    }
+
+    @objc func undo(_ sender: Any?) {
+        editing.client?.editorPerform(.undo)
+    }
+
+    @objc func redo(_ sender: Any?) {
+        editing.client?.editorPerform(.redo)
+    }
 
     /// Row frame in view coordinates.
     func rowFrame(_ row: Int) -> CGRect? {

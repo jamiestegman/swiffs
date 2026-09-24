@@ -151,6 +151,10 @@ extension CodeGridView {
     }
 
     @objc func copy(_ sender: Any?) {
+        if let client = editing.client {
+            client.editorPerform(.copy)
+            return
+        }
         guard let selection = textSelection, !selection.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -158,6 +162,10 @@ extension CodeGridView {
     }
 
     override func selectAll(_ sender: Any?) {
+        if let client = editing.client {
+            client.editorPerform(.selectAll)
+            return
+        }
         let column = textSelection?.column ?? 0
         guard column < columns.count else { return }
         var first: Int?
@@ -195,6 +203,17 @@ extension CodeGridView {
 
 extension CodeGridView: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let client = editing.client {
+            switch menuItem.action {
+            case #selector(copy(_:)): return client.editorCanPerform(.copy)
+            case #selector(cut(_:)): return client.editorCanPerform(.cut)
+            case #selector(paste(_:)): return client.editorCanPerform(.paste)
+            case #selector(selectAll(_:)): return client.editorCanPerform(.selectAll)
+            case #selector(undo(_:)): return client.editorCanPerform(.undo)
+            case #selector(redo(_:)): return client.editorCanPerform(.redo)
+            default: return true
+            }
+        }
         switch menuItem.action {
         case #selector(copy(_:)):
             return textSelection.map { !$0.isEmpty } ?? false

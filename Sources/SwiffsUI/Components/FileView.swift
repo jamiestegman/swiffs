@@ -3,6 +3,7 @@
 
 import AppKit
 import SwiffsCore
+import SwiffsEditor
 import SwiffsHighlight
 
 /// Renders one file. `Metadata` is the payload type of line annotations.
@@ -47,6 +48,8 @@ public final class FileView<Metadata>: DiffsDocumentView {
     private var pendingHighlightKey: HighlightKey?
     private var annotationsByLine: [Int: [Annotation]] = [:]
     private var plainLineCache: [Int: HighlightedLine] = [:]
+    /// The attached editor (`DiffsEditor.edit`); retained until it cleans up.
+    private var editorSource: EditorLineSource?
 
     private struct HighlightKey: Equatable {
         var file: FileContents
@@ -99,7 +102,7 @@ public final class FileView<Metadata>: DiffsDocumentView {
         grid.setSelectedRange(range)
     }
 
-    public var selectedLines: SelectedLineRange? { grid.selectedRange }
+    public var selectedLines: SelectedLineRange? { grid.lineSelectionRange }
 
     public var hoveredLine: DiffsHoveredLine? {
         guard let row = grid.hoveredRow, row < grid.model.rows.count, case .line(let line)? = grid.model.rows[row].cells.first ?? nil else { return nil }
@@ -162,7 +165,7 @@ public final class FileView<Metadata>: DiffsDocumentView {
             gridContentChanged()
             return
         }
-        rowsResult = buildFileRows(lineCount: lines.count, annotationLines: Set(annotationsByLine.keys))
+        rowsResult = buildFileRows(lineCount: editorSource?.lineCount ?? lines.count, annotationLines: Set(annotationsByLine.keys))
         rebuildGrid()
     }
 
@@ -205,6 +208,11 @@ public final class FileView<Metadata>: DiffsDocumentView {
     }
 
     override func line(side: AnnotationSide, lineIndex: Int) -> HighlightedLine {
+        if let editorSource { return editorSource.highlightedLine(lineIndex) }
+        return originalLine(lineIndex)
+    }
+
+    private func originalLine(_ lineIndex: Int) -> HighlightedLine {
         if let highlightResult, highlightKey?.file == file, lineIndex < highlightResult.lines.count, let line = highlightResult.lines[lineIndex] {
             return line
         }
@@ -264,4 +272,48 @@ public final class FileView<Metadata>: DiffsDocumentView {
     override var gridHandlesGutterUtilityClicks: Bool { onGutterUtilityClick != nil }
     override var gridHandlesTokenEvents: Bool { onTokenClick != nil || onTokenEnter != nil || onTokenLeave != nil }
     override var gridHandlesLineHoverEvents: Bool { onLineEnter != nil || onLineLeave != nil }
+}
+
+// MARK: - Editor host
+
+extension FileView: EditorHost {
+    var editorGrid: CodeGridView { grid }
+    var editorFile: FileContents? { file }
+
+    var editorTheme: (name: String, kind: ThemeKind) {
+        switch style.theme.slots {
+        case .single(let name):
+            return (name, style.theme.baseThemeType ?? (style.isDark ? .dark : .light))
+        case .pair(let dark, let light):
+            return style.isDark ? (dark, .dark) : (light, .light)
+        }
+    }
+
+    var editorTabSize: Int { options.typography.tabSize }
+    var editorWraps: Bool { options.overflow == .wrap }
+
+    func editorOriginalLine(_ index: Int) -> HighlightedLine {
+        originalLine(index)
+    }
+
+    func editorAttach(_ provider: EditorLineSource) {
+        editorSource = provider
+        rebuildRows()
+    }
+
+    func editorDetach() {
+        editorSource = nil
+        rebuildRows()
+        grid.invalidateLines()
+    }
+
+    func editorDocumentChanged(_ change: TextDocumentChange?) {
+        rebuildRows()
+    }
+
+    /// Annotations moved by an edit.
+    func applyEditorAnnotations(_ annotations: [Annotation]) {
+        setAnnotations(annotations)
+        rebuildRows()
+    }
 }

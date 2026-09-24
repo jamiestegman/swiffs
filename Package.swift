@@ -53,17 +53,17 @@ let package = Package(
         // AppKit views: FileDiffView, FileView, CodeView and SwiftUI wrappers.
         .target(
             name: "SwiffsUI",
-            dependencies: ["SwiffsCore", "SwiffsHighlight"]
+            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsEditor"]
         ),
         // Development tool: renders views offscreen to PNG for visual checks.
         .executableTarget(
             name: "swiffs-snapshot",
-            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsUI"]
+            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsEditor", "SwiffsUI"]
         ),
         // Demo app: `swift run SwiffsDemo`.
         .executableTarget(
             name: "SwiffsDemo",
-            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsUI"],
+            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsEditor", "SwiffsUI"],
             path: "Examples/SwiffsDemo",
             resources: [.copy("Resources")]
         ),

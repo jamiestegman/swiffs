@@ -41,4 +41,19 @@ struct FileDiffViewTests {
         #expect(view.revealLine(198))
         #expect(view.isLineRenderable(198))
     }
+
+    @Test func expandButtonsAreAccessible() throws {
+        let old = (1 ... 60).map { "line \($0)\n" }.joined()
+        let view = FileDiffView<Void>()
+        view.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        try view.render(oldFile: FileContents(name: "a.txt", contents: old), newFile: FileContents(name: "a.txt", contents: old.replacingOccurrences(of: "line 30\n", with: "x\n")))
+        view.layoutSubtreeIfNeeded()
+        let buttons = try #require(view.grid.accessibilityChildren() as? [GridAccessibilityButton])
+        #expect(!buttons.isEmpty)
+        #expect(buttons.allSatisfy { $0.accessibilityRole() == .button })
+        let before = view.grid.model.rows.count
+        let up = try #require(buttons.first { $0.accessibilityLabel() == "Expand up" || $0.accessibilityLabel() == "Expand all" })
+        #expect(up.accessibilityPerformPress())
+        #expect(view.grid.model.rows.count > before)
+    }
 }

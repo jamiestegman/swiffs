@@ -5,7 +5,6 @@ let package = Package(
     name: "swiffs",
     platforms: [
         .macOS(.v14),
-        .iOS(.v17),
     ],
     products: [
         .library(name: "SwiffsCore", targets: ["SwiffsCore"]),

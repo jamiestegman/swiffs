@@ -15,6 +15,18 @@ Swiffs is structured like a native library with a UI-free core
 | `SwiffsUI`        | AppKit views and SwiftUI wrappers. |
 | `COniguruma`      | Vendored Oniguruma 6.9.10 regex engine. |
 
+## Requirements
+
+- macOS 14 or later
+- Xcode 16 or later (Swift 6.0 toolchain)
+
+## Upstream
+
+Ported from `@pierre/diffs` 1.4.3, upstream commit
+[`6460d4e`](https://github.com/pierrecomputer/pierre/commit/6460d4ecf6f11a7e4d52a99a87cb1024109723d1).
+See `UPSTREAM.md` for dependency versions, unported changes and the porting
+policy.
+
 ## Views
 
 | Upstream              | Swiffs |

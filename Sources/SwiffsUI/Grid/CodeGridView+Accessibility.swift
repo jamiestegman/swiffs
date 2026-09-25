@@ -148,14 +148,19 @@ final class GridAccessibilityButton: NSAccessibilityElement, @unchecked Sendable
         setAccessibilityParent(parent)
     }
 
+    // The main actor closures capture copies of the stored properties rather
+    // than `self`, which is not main actor isolated.
     override func accessibilityFrame() -> NSRect {
-        MainActor.assumeIsolated {
+        let grid = grid
+        let frameInGrid = frameInGrid
+        return MainActor.assumeIsolated {
             guard let grid, let window = grid.window else { return .zero }
             return window.convertToScreen(grid.convert(frameInGrid, to: nil))
         }
     }
 
     override func accessibilityPerformPress() -> Bool {
+        let press = press
         MainActor.assumeIsolated { press() }
         return true
     }

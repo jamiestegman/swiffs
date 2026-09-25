@@ -338,22 +338,9 @@ extension DiffsHighlighter {
         decorations: [Int: [LineRange]],
         tokenizeMaxLineLength: Int
     ) throws -> [HighlightedLine] {
-        let tokenLines = try tokenize(code, lang: lang, themes: slots, tokenizeMaxLineLength: tokenizeMaxLineLength)
-        var result: [HighlightedLine] = []
-        result.reserveCapacity(tokenLines.count)
-        for (lineIndex, tokens) in tokenLines.enumerated() {
-            var text = ""
-            var highlighted: [HighlightedToken] = []
-            highlighted.reserveCapacity(tokens.count)
-            var offset = 0
-            for token in tokens {
-                let length = token.content.utf16.count
-                if length == 0 { continue }
-                text += token.content
-                highlighted.append(HighlightedToken(start: offset, end: offset + length, styles: TokenStyles(token.styles)))
-                offset += length
-            }
-            result.append(HighlightedLine(text: text, tokens: highlighted, diffSpans: decorations[lineIndex] ?? []))
+        var result = try highlightLines(code, lang: lang, slots: slots, tokenizeMaxLineLength: tokenizeMaxLineLength)
+        for (lineIndex, spans) in decorations where lineIndex < result.count {
+            result[lineIndex].diffSpans = spans
         }
         return result
     }

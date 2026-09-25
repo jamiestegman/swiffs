@@ -244,14 +244,7 @@ public final class Highlighter {
     public func setTheme(_ name: String) throws -> (theme: ThemeRegistration, colorMap: [String]) {
         let theme = try getTheme(name)
         if lastTheme != name {
-            let textmateTheme: TextMateTheme
-            if let cached = textmateThemes[name] {
-                textmateTheme = cached
-            } else {
-                textmateTheme = TextMateTheme.createFromRawTheme(theme.settings)
-                textmateThemes[name] = textmateTheme
-            }
-            syncRegistry.setTheme(textmateTheme)
+            syncRegistry.setTheme(try textmateTheme(name, theme))
             lastTheme = name
         }
         return (theme, syncRegistry.getColorMap())
@@ -356,26 +349,10 @@ public final class Highlighter {
     /// grammar runs once under the first theme, and the other themes resolve
     /// colors from the same scopes. Equivalent to one run per theme.
     func tokenizeWithThemes(_ code: String, grammar: Grammar, themeNames: [String], options: TokenizeOptions) throws -> [[[ThemedToken]]] {
-        guard let firstName = themeNames.first else { return [] }
-        var entries: [(theme: ThemeRegistration, textmate: TextMateTheme, replacements: [String: String])] = []
-        for name in themeNames {
-            let theme = try getTheme(name)
-            let textmate: TextMateTheme
-            if let cached = textmateThemes[name] {
-                textmate = cached
-            } else {
-                textmate = TextMateTheme.createFromRawTheme(theme.settings)
-                textmateThemes[name] = textmate
-            }
-            var replacements = theme.colorReplacements
-            for (key, value) in options.colorReplacements { replacements[key] = value }
-            entries.append((theme, textmate, replacements))
-        }
-        let (_, primaryColorMap) = try setTheme(firstName)
-        let resolvers = entries.dropFirst().map { grammar.attributeResolver(for: $0.textmate) }
-        let colorMaps = [primaryColorMap] + resolvers.map(\.colorMap)
+        guard !themeNames.isEmpty else { return [] }
+        let (resolvers, colors) = try prepareThemes(themeNames, grammar: grammar, options: options)
         let lines = shikiSplitLines(code)
-        var results: [[[ThemedToken]]] = entries.map { _ in [] }
+        var results: [[[ThemedToken]]] = colors.map { _ in [] }
         var stateStack = StateStack.initial
         for (line, lineOffset) in lines {
             if line.isEmpty {
@@ -390,11 +367,37 @@ public final class Highlighter {
             let units = Array(line.utf16)
             let perTheme = [result.primary.tokens] + result.extra
             for index in results.indices {
-                results[index].append(Self.themedTokens(perTheme[index], units: units, lineOffset: lineOffset, colorMap: colorMaps[index], colorReplacements: entries[index].replacements))
+                results[index].append(Self.themedTokens(perTheme[index], units: units, lineOffset: lineOffset, colorMap: colors[index].colorMap, colorReplacements: colors[index].replacements))
             }
             stateStack = result.primary.ruleStack
         }
         return results
+    }
+
+    /// Activates the first theme for tokenization and returns attribute
+    /// resolvers for the others plus a color resolver per theme.
+    func prepareThemes(_ themeNames: [String], grammar: Grammar, options: TokenizeOptions) throws -> (attributes: [ThemeAttributeResolver], colors: [ThemeColorResolver]) {
+        var textmateThemes: [TextMateTheme] = []
+        var replacements: [[String: String]] = []
+        for name in themeNames {
+            let theme = try getTheme(name)
+            textmateThemes.append(try textmateTheme(name, theme))
+            var merged = theme.colorReplacements
+            for (key, value) in options.colorReplacements { merged[key] = value }
+            replacements.append(merged)
+        }
+        let (_, primaryColorMap) = try setTheme(themeNames[0])
+        let attributes = textmateThemes.dropFirst().map { grammar.attributeResolver(for: $0) }
+        let colorMaps = [primaryColorMap] + attributes.map(\.colorMap)
+        let colors = zip(colorMaps, replacements).map { ThemeColorResolver(colorMap: $0, replacements: $1) }
+        return (attributes, colors)
+    }
+
+    private func textmateTheme(_ name: String, _ theme: ThemeRegistration) throws -> TextMateTheme {
+        if let cached = textmateThemes[name] { return cached }
+        let created = TextMateTheme.createFromRawTheme(theme.settings)
+        textmateThemes[name] = created
+        return created
     }
 
     /// Shiki `codeToTokensWithThemes`: tokenizes with each theme and aligns
@@ -465,4 +468,30 @@ public func alignThemesTokenization(_ themes: [[[ThemedToken]]]) -> [[[ThemedTok
         }
     }
     return outThemes
+}
+
+/// Converts one theme's token metadata to styles (Shiki's color lookup with
+/// `colorReplacements`), caching each distinct metadata value.
+struct ThemeColorResolver {
+    let colorMap: [String]
+    let replacements: [String: String]
+    private var cache: [UInt32: TokenStyle] = [:]
+
+    init(colorMap: [String], replacements: [String: String]) {
+        self.colorMap = colorMap
+        self.replacements = replacements
+    }
+
+    mutating func style(for metadata: UInt32) -> TokenStyle {
+        if let cached = cache[metadata] { return cached }
+        let colorId = EncodedTokenMetadata.getForeground(metadata)
+        let raw: String? = colorId < colorMap.count && !colorMap[colorId].isEmpty ? colorMap[colorId] : nil
+        let color = applyColorReplacements(raw, replacements)
+        let style = TokenStyle(
+            color: color.flatMap { $0.isEmpty ? nil : $0 },
+            fontStyle: FontStyle(rawValue: EncodedTokenMetadata.getFontStyle(metadata))
+        )
+        cache[metadata] = style
+        return style
+    }
 }

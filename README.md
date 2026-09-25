@@ -4,6 +4,9 @@ A native Swift port of [`@pierre/diffs`](https://diffs.com)
 ([source](https://github.com/pierrecomputer/pierre/tree/main/packages/diffs)),
 the diff and file rendering library from The Pierre Computer Company.
 
+Swiffs is an independent port and is not affiliated with or endorsed by The
+Pierre Computer Company.
+
 Swiffs is structured like a native library with a UI-free core
 (in the spirit of `libghostty`):
 

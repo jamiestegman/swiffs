@@ -1,8 +1,13 @@
 # Notices
 
+Swiffs
+Copyright 2026 Jamie Stegman
+
 Swiffs is a Swift port of `@pierre/diffs`
 (https://github.com/pierrecomputer/pierre), Copyright 2025 Pierre Computer
-Company, licensed under the Apache License, Version 2.0.
+Company, licensed under the Apache License, Version 2.0. Swiffs is an
+independent project and is not affiliated with or endorsed by The Pierre
+Computer Company.
 
 Portions of `Sources/SwiffsCore/JSDiff` are ported from jsdiff
 (https://github.com/kpdecker/jsdiff), Copyright (c) 2009-2015 Kevin Decker,

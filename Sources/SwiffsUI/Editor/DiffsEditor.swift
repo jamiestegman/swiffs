@@ -731,7 +731,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
             let end = index + 1 < tokens.count ? tokens[index + 1].offset : start + token.text.utf16.count
             guard start < end, start < length else { continue }
             let style = TokenStyle(color: token.color.isEmpty ? nil : token.color)
-            highlighted.append(HighlightedToken(start: start, end: min(end, length), styles: Array(repeating: style, count: slots)))
+            highlighted.append(HighlightedToken(start: start, end: min(end, length), styles: TokenStyles(repeating: style, count: slots)))
         }
         return HighlightedLine(text: text, tokens: highlighted)
     }

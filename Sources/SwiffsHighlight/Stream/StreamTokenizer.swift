@@ -9,9 +9,9 @@ import SwiffsCore
 public struct StreamToken: Hashable, Sendable {
     public var content: String
     /// One style per theme slot; empty for line break tokens.
-    public var styles: [TokenStyle]
+    public var styles: TokenStyles
 
-    public init(content: String, styles: [TokenStyle]) {
+    public init(content: String, styles: TokenStyles) {
         self.content = content
         self.styles = styles
     }
@@ -127,7 +127,7 @@ extension DiffsHighlighter {
         if effectiveLang == "ansi" {
             // ANSI has no grammar state; each line starts fresh.
             let lines = try tokenizeLines(line, lang: "ansi", themes: themes, tokenizeMaxLineLength: tokenizeMaxLineLength)
-            return ((lines.first ?? []).map { StreamToken(content: $0.content, styles: $0.styles) }, nil)
+            return ((lines.first ?? []).map { StreamToken(content: $0.content, styles: TokenStyles($0.styles)) }, nil)
         }
         let options = TokenizeOptions(tokenizeMaxLineLength: tokenizeMaxLineLength, tokenizeTimeLimit: 0)
         let names = themes.themeNames
@@ -145,10 +145,10 @@ extension DiffsHighlighter {
             return ([], hasState ? states : nil)
         }
         let tokens = firstLine.enumerated().map { tokenIndex, token in
-            StreamToken(content: token.content, styles: aligned.map { themeTokens in
+            StreamToken(content: token.content, styles: TokenStyles(aligned.map { themeTokens in
                 let t = themeTokens[0][tokenIndex]
                 return TokenStyle(color: t.color.flatMap { $0.isEmpty ? nil : $0 }, fontStyle: t.fontStyle)
-            })
+            }))
         }
         return (tokens, hasState ? states : nil)
     }

@@ -350,7 +350,7 @@ extension DiffsHighlighter {
                 let length = token.content.utf16.count
                 if length == 0 { continue }
                 text += token.content
-                highlighted.append(HighlightedToken(start: offset, end: offset + length, styles: token.styles))
+                highlighted.append(HighlightedToken(start: offset, end: offset + length, styles: TokenStyles(token.styles)))
                 offset += length
             }
             result.append(HighlightedLine(text: text, tokens: highlighted, diffSpans: decorations[lineIndex] ?? []))

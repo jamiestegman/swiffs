@@ -17,15 +17,68 @@ public struct TokenStyle: Hashable, Sendable {
     }
 }
 
+/// A token's styles, one per theme slot: `[style]` for a single theme,
+/// `[dark, light]` for a theme pair. Stored inline (at most two slots), so
+/// tokens carry no heap allocation.
+public struct TokenStyles: Hashable, Sendable {
+    // Invariant: `secondSlot` is only set when `firstSlot` is.
+    private var firstSlot: TokenStyle?
+    private var secondSlot: TokenStyle?
+
+    public init() {}
+
+    public init(_ first: TokenStyle, _ second: TokenStyle? = nil) {
+        firstSlot = first
+        secondSlot = second
+    }
+
+    /// Styles from a sequence of at most two elements.
+    public init<S: Sequence>(_ styles: S) where S.Element == TokenStyle {
+        var iterator = styles.makeIterator()
+        firstSlot = iterator.next()
+        secondSlot = firstSlot == nil ? nil : iterator.next()
+        precondition(iterator.next() == nil, "TokenStyles holds at most two theme slots")
+    }
+
+    public init(repeating style: TokenStyle, count: Int) {
+        precondition((0 ... 2).contains(count), "TokenStyles holds at most two theme slots")
+        firstSlot = count > 0 ? style : nil
+        secondSlot = count > 1 ? style : nil
+    }
+}
+
+extension TokenStyles: RandomAccessCollection, MutableCollection {
+    public var startIndex: Int { 0 }
+    public var endIndex: Int { secondSlot != nil ? 2 : firstSlot != nil ? 1 : 0 }
+
+    public subscript(position: Int) -> TokenStyle {
+        get {
+            switch position {
+            case 0: return firstSlot!
+            case 1: return secondSlot!
+            default: preconditionFailure("TokenStyles index out of range")
+            }
+        }
+        set {
+            precondition(position < endIndex, "TokenStyles index out of range")
+            if position == 0 { firstSlot = newValue } else { secondSlot = newValue }
+        }
+    }
+}
+
+extension TokenStyles: ExpressibleByArrayLiteral {
+    public init(arrayLiteral elements: TokenStyle...) {
+        self.init(elements)
+    }
+}
+
 /// A token within a line. Offsets are UTF-16 code units into the line text.
 public struct HighlightedToken: Hashable, Sendable {
     public var start: Int
     public var end: Int
-    /// One style per theme slot (`[style]` for a single theme,
-    /// `[dark, light]` for a theme pair).
-    public var styles: [TokenStyle]
+    public var styles: TokenStyles
 
-    public init(start: Int, end: Int, styles: [TokenStyle]) {
+    public init(start: Int, end: Int, styles: TokenStyles) {
         self.start = start
         self.end = end
         self.styles = styles
@@ -62,7 +115,7 @@ public struct HighlightedLine: Hashable, Sendable {
     /// A plain (unhighlighted) line.
     public static func plain(_ text: String, slots: Int) -> HighlightedLine {
         let length = text.utf16.count
-        let tokens = length == 0 ? [] : [HighlightedToken(start: 0, end: length, styles: Array(repeating: TokenStyle(), count: slots))]
+        let tokens = length == 0 ? [] : [HighlightedToken(start: 0, end: length, styles: TokenStyles(repeating: TokenStyle(), count: slots))]
         return HighlightedLine(text: text, tokens: tokens)
     }
 }

@@ -64,7 +64,7 @@ struct StreamParityTests {
             return expected.htmlStyle == nil && expected.color == nil
         }
         if pair {
-            return htmlStyle(actual.styles, slots: ["dark", "light"]) == (expected.htmlStyle ?? [:])
+            return htmlStyle(Array(actual.styles), slots: ["dark", "light"]) == (expected.htmlStyle ?? [:])
         }
         let style = actual.styles.first ?? TokenStyle()
         return style.color == expected.color && style.fontStyle.rawValue == expected.fontStyle

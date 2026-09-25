@@ -156,6 +156,7 @@ public final class RawGrammar {
 
     /// Parses a grammar from JSON.
     public convenience init(json: [String: Any]) throws {
+        let json = nativeJSON(json) as! [String: Any]
         guard let scopeName = json["scopeName"] as? String else {
             throw DiffsHighlightError("Grammar is missing scopeName")
         }

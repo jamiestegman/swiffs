@@ -41,6 +41,7 @@ public struct ThemeRegistration: Hashable, Sendable {
     /// Parses a raw (VS Code / TextMate / Shiki) theme JSON object and
     /// normalizes it like Shiki's `normalizeTheme`.
     public init(json: [String: Any], name overrideName: String? = nil) throws {
+        let json = nativeJSON(json) as! [String: Any]
         guard let name = overrideName ?? (json["name"] as? String) else {
             throw DiffsHighlightError("Theme is missing a name")
         }

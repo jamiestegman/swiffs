@@ -15,21 +15,37 @@ concurrency:
 
 jobs:
   test:
-    name: Build and test (${{ matrix.os }})
+    name: Build and test (Xcode ${{ matrix.xcode }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # macos-15: Xcode 16 (Swift 6.1). macos-26: Xcode 26 (Swift 6.2).
-        os: [macos-15, macos-26]
+        include:
+          # Oldest supported toolchain: swift-tools-version 6.0 in Package.swift.
+          - os: macos-15
+            xcode: '16.0'
+            developer-dir: /Applications/Xcode_16.app/Contents/Developer
+          # Toolchain used for development.
+          - os: macos-15
+            xcode: '16.4'
+            developer-dir: /Applications/Xcode_16.4.app/Contents/Developer
+          # Newest stable toolchain.
+          - os: macos-26
+            xcode: '26.6'
+            developer-dir: /Applications/Xcode_26.6.app/Contents/Developer
+    env:
+      DEVELOPER_DIR: ${{ matrix.developer-dir }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Toolchain
-        run: swift --version
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
 
       - name: Build
         run: swift build --build-tests

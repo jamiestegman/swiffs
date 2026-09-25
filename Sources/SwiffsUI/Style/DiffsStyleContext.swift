@@ -32,6 +32,12 @@ final class DiffsStyleContext {
     let descent: CGFloat
 
     private var colorCache: [String: CGColor] = [:]
+    private var tokenAttributesCache: [TokenAttributesKey: CFDictionary] = [:]
+
+    private struct TokenAttributesKey: Hashable {
+        var style: TokenStyle
+        var dimmed: Bool
+    }
 
     init(typography: DiffsTypography, theme: ResolvedDiffsTheme, themeType: ThemeType, systemIsDark: Bool, overrides: DiffsColorOverrides) {
         self.typography = typography
@@ -87,6 +93,44 @@ final class DiffsStyleContext {
 
     func cgColor(_ color: RGBAColor) -> CGColor {
         CGColor(srgbRed: color.r, green: color.g, blue: color.b, alpha: color.a)
+    }
+
+    /// Attributes shared by every code line: font, default color, tab stops.
+    private(set) lazy var baseTextAttributes: CFDictionary = {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.defaultTabInterval = CGFloat(typography.tabSize) * ch
+        paragraph.tabStops = []
+        paragraph.lineBreakMode = .byCharWrapping
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: regularFont,
+            .foregroundColor: cgColor(palette.fg),
+            .paragraphStyle: paragraph,
+            .ligature: 0,
+        ]
+        return attributes as CFDictionary
+    }()
+
+    /// Attributes for a token style, created once per style.
+    func tokenAttributes(_ tokenStyle: TokenStyle, dimmed: Bool) -> CFDictionary {
+        let key = TokenAttributesKey(style: tokenStyle, dimmed: dimmed)
+        if let cached = tokenAttributesCache[key] { return cached }
+        var color = tokenColor(tokenStyle.color)
+        if dimmed { color = color.copy(alpha: color.alpha * 0.6) ?? color }
+        var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: color]
+        if !tokenStyle.fontStyle.isEmpty {
+            attributes[.font] = font(for: tokenStyle.fontStyle)
+            if tokenStyle.fontStyle.contains(.underline) {
+                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.underlineColor] = color
+            }
+            if tokenStyle.fontStyle.contains(.strikethrough) {
+                attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.strikethroughColor] = color
+            }
+        }
+        let dictionary = attributes as CFDictionary
+        tokenAttributesCache[key] = dictionary
+        return dictionary
     }
 
     /// Resolves a theme token color string (`#RRGGBB[AA]`).

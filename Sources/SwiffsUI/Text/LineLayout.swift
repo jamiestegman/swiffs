@@ -31,41 +31,25 @@ final class LineLayout {
 
     var visualLineCount: Int { max(1, lines.count) }
 
-    /// Builds the attributed string for a highlighted line.
+    /// Builds the attributed string for a highlighted line from the style
+    /// context's shared attribute dictionaries.
     static func attributedString(_ line: HighlightedLine, style: DiffsStyleContext, dimmed: Bool = false) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: line.text)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.defaultTabInterval = CGFloat(style.typography.tabSize) * style.ch
-        paragraph.tabStops = []
-        paragraph.lineBreakMode = .byCharWrapping
-        let fullRange = NSRange(location: 0, length: result.length)
-        result.addAttributes([
-            .font: style.regularFont,
-            .foregroundColor: style.cgColor(style.palette.fg),
-            .paragraphStyle: paragraph,
-            .ligature: 0,
-        ], range: fullRange)
+        let result = CFAttributedStringCreateMutable(nil, 0)!
+        CFAttributedStringReplaceString(result, CFRange(location: 0, length: 0), line.text as CFString)
+        let length = CFAttributedStringGetLength(result)
+        CFAttributedStringBeginEditing(result)
+        CFAttributedStringSetAttributes(result, CFRange(location: 0, length: length), style.baseTextAttributes, true)
         let index = min(style.styleIndex, max(0, (line.tokens.first?.styles.count ?? 1) - 1))
-        for token in line.tokens {
-            guard token.start < token.end, token.end <= result.length else { continue }
-            let range = NSRange(location: token.start, length: token.end - token.start)
+        for token in line.tokens where token.start < token.end && token.end <= length {
             let tokenStyle = index < token.styles.count ? token.styles[index] : TokenStyle()
-            var color = style.tokenColor(tokenStyle.color)
-            if dimmed { color = color.copy(alpha: color.alpha * 0.6) ?? color }
-            var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: color]
-            if !tokenStyle.fontStyle.isEmpty {
-                attributes[.font] = style.font(for: tokenStyle.fontStyle)
-                if tokenStyle.fontStyle.contains(.underline) {
-                    attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                    attributes[.underlineColor] = color
-                }
-                if tokenStyle.fontStyle.contains(.strikethrough) {
-                    attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
-                    attributes[.strikethroughColor] = color
-                }
-            }
-            result.addAttributes(attributes, range: range)
+            CFAttributedStringSetAttributes(
+                result,
+                CFRange(location: token.start, length: token.end - token.start),
+                style.tokenAttributes(tokenStyle, dimmed: dimmed),
+                false
+            )
         }
+        CFAttributedStringEndEditing(result)
         return result
     }
 

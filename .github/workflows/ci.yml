@@ -22,10 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Oldest supported toolchain: swift-tools-version 6.0 in Package.swift.
+          # Oldest supported toolchain: swift-tools-version 6.1 in Package.swift.
           - os: macos-15
-            xcode: '16.0'
-            developer-dir: /Applications/Xcode_16.app/Contents/Developer
+            xcode: '16.3'
+            developer-dir: /Applications/Xcode_16.3.app/Contents/Developer
           # Toolchain used for development.
           - os: macos-15
             xcode: '16.4'

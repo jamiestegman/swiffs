@@ -54,4 +54,46 @@ struct ConcurrencyInvarianceTests {
             #expect(result.additionLines == serial.additionLines)
         }
     }
+
+    /// Independent highlighters share compiled regexes process-wide; heavy
+    /// parallel use must still match serial output line for line.
+    @Test func parallelHighlightersSharingRegexesMatchSerial() throws {
+        let files = RenderStressParityTests.fixture.fileCases.map(\.file)
+        let options = RenderFileOptions()
+        // Embedded languages highlight only when loaded, so every highlighter
+        // starts with the same languages.
+        let langs = Array(Set(files.compactMap { $0.lang ?? getFiletypeFromFileName($0.name) }))
+        func makeHighlighter() -> DiffsHighlighter {
+            let highlighter = DiffsHighlighter()
+            try? highlighter.prepare(langs: langs, themes: [DiffsConstants.defaultThemes.dark, DiffsConstants.defaultThemes.light])
+            return highlighter
+        }
+        let serial = try files.map { try makeHighlighter().renderFile($0, options: options).lines }
+        final class Results: @unchecked Sendable {
+            var lines: [[[HighlightedLine?]]] = Array(repeating: [], count: 8)
+            var errors: [[String]] = Array(repeating: [], count: 8)
+        }
+        let results = Results()
+        DispatchQueue.concurrentPerform(iterations: 8) { worker in
+            let highlighter = makeHighlighter()
+            // Each worker walks every file, starting at a different one.
+            var output = [[HighlightedLine?]](repeating: [], count: files.count)
+            for step in 0 ..< files.count {
+                let index = (step + worker * 5) % files.count
+                do {
+                    output[index] = try highlighter.renderFile(files[index], options: options).lines
+                } catch {
+                    results.errors[worker].append("\(files[index].name): \(error)")
+                }
+            }
+            results.lines[worker] = output
+        }
+        var mismatches = results.errors.flatMap { $0 }
+        for worker in 0 ..< 8 {
+            for index in files.indices where results.lines[worker][index] != serial[index] {
+                mismatches.append("worker \(worker) differs on \(files[index].name)")
+            }
+        }
+        #expect(mismatches.isEmpty, "\(mismatches.count) mismatches: \(mismatches.prefix(8))")
+    }
 }

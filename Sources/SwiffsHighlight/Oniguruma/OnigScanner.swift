@@ -7,6 +7,11 @@
 import COniguruma
 import Foundation
 
+/// Initializes Oniguruma once per process.
+func onigInitialize() {
+    _ = onigInitialized
+}
+
 private let onigInitialized: Bool = {
     var encoding: OnigEncoding? = swiffs_onig_encoding_utf8()
     return withUnsafeMutablePointer(to: &encoding) { pointer in
@@ -39,10 +44,7 @@ public struct OnigFindOptions: OptionSet, Sendable {
 
 /// A string prepared for scanning: UTF-8 bytes plus UTF-16 offset maps.
 public final class OnigString {
-    nonisolated(unsafe) private static var lastID = 0
-
     public let content: String
-    let id: Int
     let utf8: [UInt8]
     /// UTF-16 code units of the content (JavaScript string view).
     let utf16: [UInt16]
@@ -52,8 +54,6 @@ public final class OnigString {
     public var utf16Length: Int { utf16.count }
 
     public init(_ content: String) {
-        OnigString.lastID &+= 1
-        id = OnigString.lastID
         self.content = content
         let utf8 = Array(content.utf8)
         let utf16 = Array(content.utf16)
@@ -124,96 +124,55 @@ public struct OnigMatch: Sendable {
 
 /// Compiles a list of patterns and finds the earliest match among them.
 public final class OnigScanner {
+    /// Per-scanner search state for one shared compiled pattern.
     private final class Regex {
-        let regex: OnigRegex
+        let compiled: CompiledOnigRegex
         let region: UnsafeMutablePointer<OnigRegion>
-        let hasGAnchor: Bool
-        var lastSearchStrCacheId = 0
+        /// The string the cached search result belongs to; holding it keeps
+        /// its identity unique while cached.
+        var lastSearchString: OnigString?
         var lastSearchPosition = 0
         var lastSearchOption: OnigOptionType = OnigOptionType(ONIG_OPTION_NONE)
         var lastSearchMatched = false
 
-        init(regex: OnigRegex, hasGAnchor: Bool) {
-            self.regex = regex
-            self.region = onig_region_new()
-            self.hasGAnchor = hasGAnchor
+        var regex: OnigRegex { compiled.regex }
+        var hasGAnchor: Bool { compiled.hasGAnchor }
+
+        init(_ compiled: CompiledOnigRegex) {
+            self.compiled = compiled
+            region = onig_region_new()
         }
 
         deinit {
-            // The regex itself is freed with the scanner's regset.
             onig_region_free(region, 1)
         }
     }
 
     private let regexes: [Regex]
-    /// All patterns, searched together for short strings.
+    /// All patterns, searched together for short strings. The regexes are
+    /// shared (`OnigRegexCache`), so they are detached before the set is
+    /// freed.
     private let regset: OpaquePointer?
     public let patterns: [String]
 
     public init(patterns: [String]) throws {
-        _ = onigInitialized
         self.patterns = patterns
-        var compiled: [Regex] = []
-        compiled.reserveCapacity(patterns.count)
-        for pattern in patterns {
-            let bytes = Array(pattern.utf8)
-            var regex: OnigRegex?
-            var errorInfo = OnigErrorInfo()
-            let status = bytes.withUnsafeBufferPointer { buffer -> Int32 in
-                let base = buffer.baseAddress ?? UnsafePointer<UInt8>(bitPattern: 1)!
-                return onig_new(
-                    &regex,
-                    base,
-                    base + buffer.count,
-                    OnigOptionType(ONIG_OPTION_CAPTURE_GROUP),
-                    swiffs_onig_encoding_utf8(),
-                    swiffs_onig_syntax_default(),
-                    &errorInfo
-                )
-            }
-            guard status == ONIG_NORMAL, let regex else {
-                var message = [UInt8](repeating: 0, count: Int(ONIG_MAX_ERROR_MESSAGE_LEN))
-                _ = withUnsafeMutablePointer(to: &errorInfo) { info in
-                    message.withUnsafeMutableBufferPointer { buffer in
-                        swiffs_onig_error_code_to_str(buffer.baseAddress!, status, info)
-                    }
-                }
-                let text = String(decoding: message.prefix { $0 != 0 }, as: UTF8.self)
-                throw OnigError(message: text, pattern: pattern)
-            }
-            compiled.append(Regex(regex: regex, hasGAnchor: Self.hasGAnchor(bytes)))
-        }
-        regexes = compiled
-        var regs: [OnigRegex?] = compiled.map(\.regex)
+        regexes = try patterns.map { Regex(try OnigRegexCache.shared.regex(for: $0)) }
+        var regs: [OnigRegex?] = regexes.map(\.regex)
         var set: OpaquePointer?
         let status = regs.withUnsafeMutableBufferPointer { buffer in
             onig_regset_new(&set, Int32(buffer.count), buffer.baseAddress)
         }
-        if status == ONIG_NORMAL {
-            regset = set
-        } else {
-            // Keep ownership with the scanner; free individually on deinit.
-            regset = nil
-        }
+        regset = status == ONIG_NORMAL ? set : nil
     }
 
     deinit {
-        if let regset {
-            onig_regset_free(regset)
-        } else {
-            for regex in regexes { onig_free(regex.regex) }
+        guard let regset else { return }
+        // `onig_regset_free` frees its regexes; remove them first.
+        while case let count = onig_regset_number_of_regex(regset), count > 0 {
+            onig_regset_replace(regset, count - 1, nil)
         }
-    }
-
-    private static func hasGAnchor(_ bytes: [UInt8]) -> Bool {
-        var pos = 0
-        while pos < bytes.count {
-            if bytes[pos] == UInt8(ascii: "\\"), pos + 1 < bytes.count, bytes[pos + 1] == UInt8(ascii: "G") {
-                return true
-            }
-            pos += 1
-        }
-        return false
+        onig_regset_free(regset)
     }
 
     /// Finds the earliest match of any pattern at or after `startPosition`
@@ -237,7 +196,7 @@ public final class OnigScanner {
             var bestLocation = 0
             var bestIndex = -1
             for (index, regex) in regexes.enumerated() {
-                guard let region = search(regex, string.id, base, length, position, onigOptions),
+                guard let region = search(regex, string, base, length, position, onigOptions),
                       region.pointee.num_regs > 0
                 else { continue }
                 let location = Int(region.pointee.beg[0])
@@ -268,21 +227,21 @@ public final class OnigScanner {
 
     private func search(
         _ regex: Regex,
-        _ strCacheId: Int,
+        _ string: OnigString,
         _ base: UnsafePointer<UInt8>,
         _ length: Int,
         _ position: Int,
         _ option: OnigOptionType
     ) -> UnsafeMutablePointer<OnigRegion>? {
         if !regex.hasGAnchor,
-           regex.lastSearchStrCacheId == strCacheId,
+           regex.lastSearchString === string,
            regex.lastSearchOption == option,
            regex.lastSearchPosition <= position
         {
             if !regex.lastSearchMatched { return nil }
             if Int(regex.region.pointee.beg[0]) >= position { return regex.region }
         }
-        regex.lastSearchStrCacheId = strCacheId
+        regex.lastSearchString = string
         regex.lastSearchPosition = position
         regex.lastSearchOption = option
         let status = onig_search(

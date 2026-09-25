@@ -6,3 +6,4 @@ xcuserdata/
 DerivedData/
 *.xcodeproj
 .netrc
+.claude/*

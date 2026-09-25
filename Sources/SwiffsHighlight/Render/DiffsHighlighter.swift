@@ -14,6 +14,9 @@ public final class DiffsHighlighter {
     private var attachedLanguages: Set<String> = []
     private var attachedThemes: Set<String> = []
     private var attachedGeneration: Int
+    /// How many of the registry's attached languages this highlighter has
+    /// caught up with.
+    private var sharedLanguagesSeen = 0
     /// When set, `renderDiff` tokenizes the deletion side on this
     /// highlighter while this one tokenizes the addition side. It must not be
     /// used elsewhere during the call.
@@ -44,17 +47,32 @@ public final class DiffsHighlighter {
 
     /// Resolves (if needed) and attaches the given languages.
     public func attachLanguages(_ langs: [String]) throws {
+        var attached: [String] = []
         for lang in Set(langs) where lang != "text" && lang != "ansi" && !attachedLanguages.contains(lang) {
-            let resolved = try registry.resolveLanguage(lang)
-            let declares = resolved.data.contains { $0.name == lang || $0.aliases.contains(lang) }
-            if !declares {
-                throw DiffsHighlightError(
-                    "attachResolvedLanguages: No returned grammar declares \"\(lang)\" as its name or an alias."
-                )
-            }
-            highlighter.loadLanguages(resolved.data)
-            attachedLanguages.insert(lang)
+            try attachLanguage(lang)
+            attached.append(lang)
         }
+        registry.recordAttachedLanguages(attached)
+        // Match upstream's single shared highlighter: also attach languages
+        // other highlighters (workers, the other diff side) have attached, so
+        // embedded code highlights the same on every highlighter.
+        let shared = registry.attachedLanguages(from: sharedLanguagesSeen)
+        for lang in shared where !attachedLanguages.contains(lang) {
+            try? attachLanguage(lang)
+        }
+        sharedLanguagesSeen += shared.count
+    }
+
+    private func attachLanguage(_ lang: String) throws {
+        let resolved = try registry.resolveLanguage(lang)
+        let declares = resolved.data.contains { $0.name == lang || $0.aliases.contains(lang) }
+        if !declares {
+            throw DiffsHighlightError(
+                "attachResolvedLanguages: No returned grammar declares \"\(lang)\" as its name or an alias."
+            )
+        }
+        highlighter.loadLanguages(resolved.data)
+        attachedLanguages.insert(lang)
     }
 
     /// Resolves (if needed) and attaches the given themes.

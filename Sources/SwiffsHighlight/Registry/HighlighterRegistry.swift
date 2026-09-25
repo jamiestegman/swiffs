@@ -26,6 +26,9 @@ public final class HighlighterRegistry: @unchecked Sendable {
     private var resolvedLanguages: [String: ResolvedLanguage] = [:]
     private var resolvedThemes: [String: ThemeRegistration] = [:]
     private(set) var generation = 0
+    /// Languages any highlighter has attached, in first-attach order.
+    private var attachedLanguageList: [String] = []
+    private var attachedLanguageSet: Set<String> = []
 
     public init() {}
 
@@ -69,6 +72,23 @@ public final class HighlighterRegistry: @unchecked Sendable {
             resolvedLanguages[lang] = resolved
             return resolved
         }
+    }
+
+    /// Records languages a highlighter attached. Upstream keeps one shared
+    /// highlighter per page, so every language requested so far is available
+    /// to every render (which decides whether lazily embedded code, such as
+    /// Markdown fences, is highlighted). Highlighters here attach the same set.
+    func recordAttachedLanguages(_ langs: [String]) {
+        lock.withLock {
+            for lang in langs where attachedLanguageSet.insert(lang).inserted {
+                attachedLanguageList.append(lang)
+            }
+        }
+    }
+
+    /// Languages attached by any highlighter, from `index` on.
+    func attachedLanguages(from index: Int) -> ArraySlice<String> {
+        lock.withLock { attachedLanguageList[min(index, attachedLanguageList.count)...] }
     }
 
     public func hasResolvedLanguages(_ langs: [String]) -> Bool {

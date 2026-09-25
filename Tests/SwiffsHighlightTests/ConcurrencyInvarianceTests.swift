@@ -96,4 +96,31 @@ struct ConcurrencyInvarianceTests {
         }
         #expect(mismatches.isEmpty, "\(mismatches.count) mismatches: \(mismatches.prefix(8))")
     }
+
+    /// Lazily embedded languages (Markdown fences) highlight only when the
+    /// language is attached. Upstream has one shared highlighter; every
+    /// highlighter here, including the concurrent diff side, must see the
+    /// same languages.
+    @Test func embeddedLanguagesMatchAcrossHighlighters() throws {
+        let body = (0 ..< 250).map { "Line \($0) of prose.\n" }.joined()
+        let fence = "```ts\nconst value: number = 42;\n```\n"
+        let diff = try parseDiffFromFile(
+            oldFile: FileContents(name: "a.md", contents: fence + body),
+            newFile: FileContents(name: "a.md", contents: fence + body.replacingOccurrences(of: "Line 5 ", with: "Line five "))
+        )
+        let main = DiffsHighlighter()
+        try main.prepare(langs: ["typescript"], themes: [])
+        main.sideHighlighter = DiffsHighlighter()
+        let concurrent = try main.renderDiff(diff, options: RenderDiffOptions())
+        main.sideHighlighter = nil
+        let serial = try main.renderDiff(diff, options: RenderDiffOptions())
+        let other = try DiffsHighlighter().renderDiff(diff, options: RenderDiffOptions())
+        #expect(concurrent.deletionLines == serial.deletionLines)
+        #expect(concurrent.additionLines == serial.additionLines)
+        #expect(other.deletionLines == serial.deletionLines)
+        // The fence is highlighted as TypeScript on both sides.
+        let fenceLine = try #require(concurrent.deletionLines[1])
+        #expect(Set(fenceLine.tokens.map { $0.styles.first?.color }).count > 1)
+        #expect(concurrent.deletionLines[1] == concurrent.additionLines[1])
+    }
 }

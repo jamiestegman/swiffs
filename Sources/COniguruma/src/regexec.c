@@ -4504,6 +4504,18 @@ typedef struct {
   OnigRegion* region;
 } RR;
 
+struct OnigRegSetStruct {
+  RR*          rs;
+  int          n;
+  int          alloc;
+  OnigEncoding enc;
+  int          anchor;      /* BEGIN_BUF, BEGIN_POS, (SEMI_)END_BUF */
+  OnigLen      anc_dmin;    /* (SEMI_)END_BUF anchor distance */
+  OnigLen      anc_dmax;    /* (SEMI_)END_BUF anchor distance */
+  int          all_low_high;
+  int          anychar_inf;
+};
+
 enum SearchRangeStatus {
   SRS_DEAD      = 0,
   SRS_LOW_HIGH  = 1,
@@ -4517,31 +4529,6 @@ typedef struct {
   UChar* sch_range;
 } SearchRange;
 
-struct OnigRegSetStruct {
-  RR*          rs;
-  int          n;
-  int          alloc;
-  OnigEncoding enc;
-  int          anchor;      /* BEGIN_BUF, BEGIN_POS, (SEMI_)END_BUF */
-  OnigLen      anc_dmin;    /* (SEMI_)END_BUF anchor distance */
-  OnigLen      anc_dmax;    /* (SEMI_)END_BUF anchor distance */
-  int          all_low_high;
-  int          anychar_inf;
-  /* swiffs: position-lead search state kept across calls on the same string
-     (swiffs_onig_regset_search_cached, see SWIFFS_PATCHES.md). */
-  int          swiffs_cache_enabled;
-  int          swiffs_cache_valid;
-  int          swiffs_cache_alloc;
-  SearchRange* swiffs_sr;
-  UChar**      swiffs_computed_at; /* start of the forward search behind sr[i] */
-  UChar**      swiffs_limit;       /* ALL_RANGE from a found infinite-distance
-                                      candidate: valid while s < limit */
-  const UChar* swiffs_str;
-  const UChar* swiffs_end;
-  const UChar* swiffs_range;
-  OnigOptionType swiffs_option;
-};
-
 #define REGSET_MATCH_AND_RETURN_CHECK(upper_range) \
   r = match_at(reg, str, end, (upper_range), s, msas + i); \
   if (r != ONIG_MISMATCH) {\
@@ -4550,18 +4537,6 @@ struct OnigRegSetStruct {
     }\
     else goto finish; /* error */ \
   }
-
-/* swiffs: keep the search state for the next call on this string. */
-#define SWIFFS_RELEASE_SEARCH_RANGES do {\
-  if (use_cache != 0) {\
-    set->swiffs_cache_valid = 1;\
-    set->swiffs_str = str;\
-    set->swiffs_end = end;\
-    set->swiffs_range = range;\
-    set->swiffs_option = option;\
-  }\
-  else xfree(sr);\
-} while (0)
 
 static inline int
 regset_search_body_position_lead(OnigRegSet* set,
@@ -4577,63 +4552,16 @@ regset_search_body_position_lead(OnigRegSet* set,
   regex_t* reg;
   OnigEncoding enc;
   SearchRange* sr;
-  int use_cache, reuse;           /* swiffs */
-  UChar** computed_at = NULL;     /* swiffs */
-  UChar** limit = NULL;           /* swiffs */
 
   n   = set->n;
   enc = set->enc;
   s = (UChar* )start;
 
-  /* swiffs: with the cache enabled, the per-regex state lives in the set and
-     entries still valid for this start are reused instead of searched again. */
-  use_cache = set->swiffs_cache_enabled;
-  reuse = 0;
-  if (use_cache != 0) {
-    if (set->swiffs_cache_alloc < n) {
-      SearchRange* nsr = (SearchRange* )xrealloc(set->swiffs_sr, sizeof(*nsr) * n);
-      UChar** ncomputed;
-      UChar** nlimit;
-      CHECK_NULL_RETURN_MEMERR(nsr);
-      set->swiffs_sr = nsr;
-      ncomputed = (UChar** )xrealloc(set->swiffs_computed_at, sizeof(*ncomputed) * n);
-      CHECK_NULL_RETURN_MEMERR(ncomputed);
-      set->swiffs_computed_at = ncomputed;
-      nlimit = (UChar** )xrealloc(set->swiffs_limit, sizeof(*nlimit) * n);
-      CHECK_NULL_RETURN_MEMERR(nlimit);
-      set->swiffs_limit = nlimit;
-      set->swiffs_cache_alloc = n;
-      set->swiffs_cache_valid = 0;
-    }
-    sr = set->swiffs_sr;
-    computed_at = set->swiffs_computed_at;
-    limit = set->swiffs_limit;
-    reuse = set->swiffs_cache_valid != 0 && set->swiffs_str == str &&
-            set->swiffs_end == end && set->swiffs_range == range &&
-            set->swiffs_option == option;
-    set->swiffs_cache_valid = 0;
-  }
-  else {
-    sr = (SearchRange* )xmalloc(sizeof(*sr) * n);
-    CHECK_NULL_RETURN_MEMERR(sr);
-  }
+  sr = (SearchRange* )xmalloc(sizeof(*sr) * n);
+  CHECK_NULL_RETURN_MEMERR(sr);
 
   for (i = 0; i < n; i++) {
     reg = set->rs[i].reg;
-
-    if (reuse != 0 && computed_at[i] <= s) {
-      /* The first candidate at or after computed_at[i] is still the first
-         at or after s while s < high, so forward_search() from s would
-         return the same state. */
-      if (sr[i].state == SRS_DEAD) continue;
-      if (sr[i].state == SRS_LOW_HIGH && s < sr[i].high) continue;
-      if (sr[i].state == SRS_ALL_RANGE &&
-          (IS_NULL(limit[i]) || s < limit[i])) continue;
-    }
-    if (use_cache != 0) {
-      computed_at[i] = s;
-      limit[i] = NULL;
-    }
 
     sr[i].state = SRS_DEAD;
     if (reg->optimize != OPTIMIZE_NONE) {
@@ -4653,7 +4581,6 @@ regset_search_body_position_lead(OnigRegSet* set,
       else {
         sch_range = (UChar* )end;
         if (forward_search(reg, str, end, s, sch_range, &low, &high)) {
-          if (use_cache != 0) limit[i] = high; /* swiffs */
           goto total_active;
         }
       }
@@ -4677,7 +4604,6 @@ regset_search_body_position_lead(OnigRegSet* set,
 
         if (s <  sr[i].low) continue;
         if (s >= sr[i].high) {
-          if (use_cache != 0) computed_at[i] = s; /* swiffs */
           if (forward_search(set->rs[i].reg, str, end, s, sr[i].sch_range,
                              &low, &high) != 0) {
             sr[i].low      = low;
@@ -4721,7 +4647,6 @@ regset_search_body_position_lead(OnigRegSet* set,
         if (sr[i].state == SRS_LOW_HIGH) {
           if (s <  sr[i].low) continue;
           if (s >= sr[i].high) {
-            if (use_cache != 0) computed_at[i] = s; /* swiffs */
             if (forward_search(set->rs[i].reg, str, end, s, sr[i].sch_range,
                                &low, &high) != 0) {
               sr[i].low      = low;
@@ -4750,15 +4675,15 @@ regset_search_body_position_lead(OnigRegSet* set,
     } while (1);
   }
 
-  SWIFFS_RELEASE_SEARCH_RANGES;
+  xfree(sr);
   return ONIG_MISMATCH;
 
  finish:
-  SWIFFS_RELEASE_SEARCH_RANGES;
+  xfree(sr);
   return r;
 
  match:
-  SWIFFS_RELEASE_SEARCH_RANGES;
+  xfree(sr);
   *rmatch_pos = (int )(s - str);
   return i;
 }
@@ -5024,26 +4949,6 @@ onig_regset_search(OnigRegSet* set, const UChar* str, const UChar* end,
 
   xfree(mps);
 
-  return r;
-}
-
-/* swiffs: onig_regset_search() in position-lead mode that keeps each regex's
-   forward-search state between calls. Pass same_string = 1 only when str is
-   the same, unmodified string as the previous call on this set; state is
-   reused only where it is provably what the search would compute. */
-extern int
-swiffs_onig_regset_search_cached(OnigRegSet* set, const UChar* str,
-                                 const UChar* end, const UChar* start,
-                                 const UChar* range, OnigOptionType option,
-                                 int same_string, int* rmatch_pos)
-{
-  int r;
-
-  if (same_string == 0) set->swiffs_cache_valid = 0;
-  set->swiffs_cache_enabled = 1;
-  r = onig_regset_search(set, str, end, start, range,
-                         ONIG_REGSET_POSITION_LEAD, option, rmatch_pos);
-  set->swiffs_cache_enabled = 0;
   return r;
 }
 
@@ -6078,13 +5983,6 @@ onig_regset_new(OnigRegSet** rset, int n, regex_t* regs[])
   set->rs    = rs;
   set->n     = 0;
   set->alloc = alloc;
-  /* swiffs */
-  set->swiffs_cache_enabled = 0;
-  set->swiffs_cache_valid   = 0;
-  set->swiffs_cache_alloc   = 0;
-  set->swiffs_sr            = NULL;
-  set->swiffs_computed_at   = NULL;
-  set->swiffs_limit         = NULL;
 
   for (i = 0; i < n; i++) {
     regex_t* reg = regs[i];
@@ -6149,8 +6047,6 @@ onig_regset_add(OnigRegSet* set, regex_t* reg)
 {
   OnigRegion* region;
 
-  set->swiffs_cache_valid = 0; /* swiffs */
-
 #ifdef USE_FIND_LONGEST_SEARCH_ALL_OF_RANGE
   if (OPTON_FIND_LONGEST(reg->options))
     return ONIGERR_INVALID_ARGUMENT;
@@ -6186,8 +6082,6 @@ extern int
 onig_regset_replace(OnigRegSet* set, int at, regex_t* reg)
 {
   int i;
-
-  set->swiffs_cache_valid = 0; /* swiffs */
 
   if (at < 0 || at >= set->n)
     return ONIGERR_INVALID_ARGUMENT;
@@ -6235,10 +6129,6 @@ onig_regset_free(OnigRegSet* set)
   }
 
   xfree(set->rs);
-  /* swiffs */
-  if (IS_NOT_NULL(set->swiffs_sr)) xfree(set->swiffs_sr);
-  if (IS_NOT_NULL(set->swiffs_computed_at)) xfree(set->swiffs_computed_at);
-  if (IS_NOT_NULL(set->swiffs_limit)) xfree(set->swiffs_limit);
   xfree(set);
 }
 

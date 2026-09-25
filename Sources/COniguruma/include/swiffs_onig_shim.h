@@ -12,11 +12,4 @@ static inline int swiffs_onig_error_code_to_str(OnigUChar *buffer, int code, Oni
   return onig_error_code_to_str(buffer, code, info);
 }
 
-/* swiffs patch (src/regexec.c, SWIFFS_PATCHES.md): position-lead regset
-   search that reuses per-regex search state across calls on one string. */
-extern int swiffs_onig_regset_search_cached(OnigRegSet *set, const OnigUChar *str,
-                                            const OnigUChar *end, const OnigUChar *start,
-                                            const OnigUChar *range, OnigOptionType option,
-                                            int same_string, int *rmatch_pos);
-
 #endif

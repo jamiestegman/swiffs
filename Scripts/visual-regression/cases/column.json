@@ -1,0 +1,1 @@
+{"kind": "edit", "scheme": "light", "width": 700, "file": {"name": "v.ts", "contents": "const value = 1;\nconst other = value + value;\nfunction f(value) {\n  return value * 2;\n}\n"}, "options": {"theme": {"dark": "pierre-dark", "light": "pierre-light"}}, "editActions": [{"type": "drag", "x": 100, "y": 70, "text": "200,150", "mods": ["alt"]}, {"type": "text", "text": "X"}]}

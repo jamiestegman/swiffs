@@ -68,10 +68,29 @@ Highlighting matches Shiki token for token, and is organized for native use:
 
 - One grammar pass serves every theme; light/dark colors are resolved from
   the same scopes instead of re-tokenizing per theme.
+- Compiled Oniguruma patterns are shared process-wide by every highlighter
+  (main thread, workers), so each pattern compiles once and memory stays
+  flat as workers are added.
+- Highlighted lines are built from grammar offsets without per-token strings;
+  token styles are stored inline.
 - Short lines are matched with Oniguruma's `OnigRegSet`, like
   vscode-oniguruma.
 - Diffs highlight on a background worker pool (with an LRU cache keyed by
   `cacheKey`); large diffs tokenize their two sides concurrently.
+
+## Testing
+
+`swift test` runs the parity suites against golden fixtures generated from
+upstream (`Scripts/fixtures`), including a render stress fixture (Unicode,
+line endings, tabs, long lines, 35 languages) and concurrency invariance
+tests.
+
+Rendering changes are gated by pixel comparison:
+
+```sh
+Scripts/visual-regression/run.sh baseline   # on a known-good commit
+Scripts/visual-regression/run.sh check      # after the change
+```
 
 ## Demo
 

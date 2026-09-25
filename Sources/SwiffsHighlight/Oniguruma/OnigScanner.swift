@@ -153,6 +153,10 @@ public final class OnigScanner {
     /// shared (`OnigRegexCache`), so they are detached before the set is
     /// freed.
     private let regset: OpaquePointer?
+    /// The string the regset last searched; held so the regset's cached
+    /// search state (`swiffs_onig_regset_search_cached`) can't be mistaken
+    /// for another string at the same address.
+    private var lastRegsetString: OnigString?
     public let patterns: [String]
 
     public init(patterns: [String]) throws {
@@ -189,7 +193,9 @@ public final class OnigScanner {
             // for longer ones per-pattern caching pays off.
             if length < 1000, let regset = self.regset {
                 var matchPosition: Int32 = 0
-                let index = onig_regset_search(regset, base, base + length, base + position, base + length, ONIG_REGSET_POSITION_LEAD, onigOptions, &matchPosition)
+                let sameString: Int32 = lastRegsetString === string ? 1 : 0
+                lastRegsetString = string
+                let index = swiffs_onig_regset_search_cached(regset, base, base + length, base + position, base + length, onigOptions, sameString, &matchPosition)
                 guard index >= 0, let region = onig_regset_get_region(regset, index) else { return nil }
                 return makeMatch(Int(index), region.pointee, string)
             }

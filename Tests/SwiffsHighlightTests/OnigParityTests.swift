@@ -67,6 +67,41 @@ struct OnigParityTests {
     }
 }
 
+extension OnigParityTests {
+    /// A scanner reused across calls (search state cached per string) must
+    /// answer every query like a scanner with no history, for starts in any
+    /// order: forward, backward and repeated.
+    @Test func cachedSearchMatchesFreshScanner() throws {
+        let fixture = Self.fixture
+        var generator = SplitMix64(seed: 7)
+        // Scanner/string pairs the tokenizer actually used.
+        var pairs: [Int: Set<Int>] = [:]
+        for call in fixture.calls { pairs[call[0], default: []].insert(call[1]) }
+        var mismatches: [String] = []
+        var checked = 0
+        for (scannerIndex, stringIndices) in pairs.sorted(by: { $0.key < $1.key }) {
+            let reused = try OnigScanner(patterns: fixture.scanners[scannerIndex])
+            for stringIndex in stringIndices.sorted().prefix(6) {
+                let string = OnigString(fixture.strings[stringIndex])
+                let length = string.utf16Length
+                var starts = (0 ..< 12).map { _ in Int.random(in: 0 ... length, using: &generator) }
+                starts += [0, length, starts[0]]
+                for start in starts {
+                    let fresh = try OnigScanner(patterns: fixture.scanners[scannerIndex])
+                    let expected = Self.encode(fresh.findNextMatch(OnigString(fixture.strings[stringIndex]), start))
+                    let actual = Self.encode(reused.findNextMatch(string, start))
+                    checked += 1
+                    if actual != expected {
+                        mismatches.append("scanner \(scannerIndex) string \(stringIndex) start \(start): \(actual) != \(expected)")
+                    }
+                }
+            }
+        }
+        #expect(checked > 10_000)
+        #expect(mismatches.isEmpty, "\(mismatches.count) of \(checked) differ:\n\(mismatches.prefix(8).joined(separator: "\n"))")
+    }
+}
+
 /// Deterministic generator for reproducible shuffles.
 struct SplitMix64: RandomNumberGenerator {
     private var state: UInt64

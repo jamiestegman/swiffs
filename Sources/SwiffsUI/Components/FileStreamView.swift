@@ -232,11 +232,7 @@ public final class FileStreamView: DiffsDocumentView {
     private func scheduleRender() {
         guard !renderScheduled else { return }
         renderScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated {
-                self?.flushRender()
-            }
-        }
+        DispatchQueue.main.async { [weak self] in self?.flushRender() }
     }
 
     private func flushRender() {

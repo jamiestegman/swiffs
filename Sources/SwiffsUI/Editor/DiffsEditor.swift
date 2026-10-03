@@ -390,10 +390,8 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         // queued render callback.
         let attachedDocument = document
         DispatchQueue.main.async { [weak self, weak host] in
-            MainActor.assumeIsolated {
-                guard let self, let host, self.host === host, self.document === attachedDocument, let view = host as? NSView else { return }
-                self.onAttach?(self, view)
-            }
+            guard let self, let host, self.host === host, self.document === attachedDocument, let view = host as? NSView else { return }
+            self.onAttach?(self, view)
         }
     }
 

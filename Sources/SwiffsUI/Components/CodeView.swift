@@ -89,6 +89,11 @@ public struct CodeViewOptions: Equatable, @unchecked Sendable {
     public var smoothScrollSettings = DiffsConstants.defaultSmoothScrollSettings
     /// Extra viewport heights rendered above/below the visible area.
     public var overscan: CGFloat = 0.5
+    /// Viewport heights beyond the overscan whose items are highlighted on
+    /// the worker pool before they mount, so scrolling to them mounts a
+    /// highlighted file instead of highlighting it on the main thread.
+    /// Applies to diffs and files with a `cacheKey`.
+    public var prefetch: CGFloat = 1
 
     public init() {}
 
@@ -148,6 +153,8 @@ public final class CodeView<Metadata>: NSView {
         var top: CGFloat = 0
         var expandedHunks: [Int: HunkExpansionRegion] = [:]
         var renderedVersion: Int?
+        /// The content key last sent to the worker pool ahead of mounting.
+        var prefetchedKey: String?
 
         init(item: Item) {
             self.item = item
@@ -694,11 +701,34 @@ public final class CodeView<Metadata>: NSView {
         }
         for id in Array(mountedDiffViews.keys) where !visibleIDs.contains(id) { unmount(id) }
         for id in Array(mountedFileViews.keys) where !visibleIDs.contains(id) { unmount(id) }
+        let reach = viewportHeight * options.prefetch
+        for state in states where state.top + state.height >= minY - reach && state.top <= maxY + reach && !visibleIDs.contains(state.item.id) {
+            prefetchHighlight(state)
+        }
         if heightChanged {
             relayoutItems()
             return
         }
         updateStickyHeaders()
+    }
+
+    /// Starts highlighting an item that is about to mount, with the same
+    /// options its view will ask for, so the view finds the result cached.
+    private func prefetchHighlight(_ state: ItemState) {
+        guard !state.item.collapsed else { return }
+        switch state.item.content {
+        case .diff(let diff, _):
+            guard let key = diff.cacheKey, key != state.prefetchedKey,
+                  max(diff.additionLines.count, diff.deletionLines.count) <= options.diff.code.tokenizeMaxLength
+            else { return }
+            state.prefetchedKey = key
+            HighlightWorkerPool.shared.highlightDiff(diff, options: options.diff.renderDiffOptions) { _ in }
+        case .file(let file, _):
+            let code = options.fileOptions
+            guard let key = file.cacheKey, key != state.prefetchedKey, linesFromFileContents(file.contents).count <= code.tokenizeMaxLength else { return }
+            state.prefetchedKey = key
+            HighlightWorkerPool.shared.highlightFile(file, options: RenderFileOptions(theme: code.theme, tokenizeMaxLineLength: code.tokenizeMaxLineLength)) { _ in }
+        }
     }
 
     private func updateStickyHeaders() {

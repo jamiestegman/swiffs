@@ -261,7 +261,8 @@ public final class StateStack {
         self.anchorPos = anchorPos
     }
 
-    /// The initial state (`INITIAL` / `StateStackImpl.NULL`).
+    /// The initial state (`INITIAL` / `StateStackImpl.NULL`). Never mutated:
+    /// tokenizing starts a new stack instead of resetting this one.
     nonisolated(unsafe) public static let initial = StateStack(nil, 0, 0, 0, false, nil, nil, nil)
 
     public func equals(_ other: StateStack?) -> Bool {

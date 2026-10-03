@@ -37,15 +37,15 @@ struct ConcurrencyInvarianceTests {
         }
     }
 
-    @Test func workerPoolMatchesSerial() async throws {
+    @Test func serviceMatchesSerial() async throws {
         let diff = try Self.largeDiff()
         let options = RenderDiffOptions()
         let serial = try DiffsHighlighter().renderDiff(diff, options: options)
-        let pool = HighlightWorkerPool(workerCount: 2, cacheCapacity: 4)
+        let service = HighlightService(workerCount: 2, cacheCapacity: 4)
         // Several requests at once, so workers run in parallel.
         let results = try await withThrowingTaskGroup(of: ThemedDiffResult.self) { group in
             for _ in 0 ..< 3 {
-                group.addTask { try await pool.highlightDiff(diff, options: options) }
+                group.addTask { try await service.highlight(diff, options: options) }
             }
             return try await group.reduce(into: []) { $0.append($1) }
         }

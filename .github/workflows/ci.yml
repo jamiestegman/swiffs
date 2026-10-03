@@ -44,3 +44,6 @@ jobs:
 
       - name: Test
         run: swift test --skip-build
+
+      - name: Thread Sanitizer
+        run: swift test --sanitize=thread --filter "HighlightServiceTests|ConcurrencyInvarianceTests" --scratch-path .build/tsan

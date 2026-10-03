@@ -469,6 +469,8 @@ public func matchesEditPredictionPattern(_ path: String, _ pattern: EditPredicti
     }
 }
 
+/// Unchecked because `NSRegularExpression` is immutable and documented as
+/// safe to share across threads.
 public enum EditPredictionPattern: @unchecked Sendable {
     case glob(String)
     case regex(NSRegularExpression)

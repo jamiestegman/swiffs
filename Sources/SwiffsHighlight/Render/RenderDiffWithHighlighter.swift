@@ -348,7 +348,7 @@ extension DiffsHighlighter {
 
 // Shiki does not treat a lone carriage return as a line break. Normalize only
 // the text sent to the highlighter.
-private func normalizeHighlightLineEndings(_ contents: String) -> String {
+func normalizeHighlightLineEndings(_ contents: String) -> String {
     guard contents.utf8.contains(UInt8(ascii: "\r")) else { return contents }
     var units: [UInt16] = []
     let source = Array(contents.utf16)

@@ -53,4 +53,38 @@ struct HighlightServiceTests {
         #expect(service.cachedResult(for: file, options: options) != nil)
         #expect(service.immediateResult(for: FileContents(name: "b.swift", contents: "let b = 2"), lineCount: 1, options: options, lineLimit: 0) == nil)
     }
+
+    /// Each visible character's colour, line by line. Whitespace draws
+    /// nothing, and a whole-file highlight merges it into the next token.
+    private func colours(_ lines: [HighlightedLine]) -> [[String?]] {
+        lines.map { line in
+            let units = Array(line.text.utf16)
+            var colours = [String?](repeating: nil, count: units.count)
+            for token in line.tokens {
+                for index in token.start ..< min(token.end, colours.count) where units[index] != 0x20 && units[index] != 0x09 {
+                    colours[index] = token.styles.first?.color
+                }
+            }
+            return colours
+        }
+    }
+
+    @Test func streamingAFileMatchesHighlightingItWhole() async throws {
+        let contents = "import Foundation\r\n\n/* a comment\nspanning lines */\nlet value = \"text\" // done\r\nfunc f() -> Int { 1 }\n"
+        let file = FileContents(name: "a.swift", contents: contents)
+        let options = RenderFileOptions()
+        let whole = try DiffsHighlighter().renderFile(file, options: options).lines.compactMap { $0 }
+        let stream = try HighlightService(workerCount: 1).stream(for: file, options: options)
+        var streamed: [HighlightedLine] = []
+        var start = contents.startIndex
+        while start < contents.endIndex {
+            let end = contents.index(start, offsetBy: 5, limitedBy: contents.endIndex) ?? contents.endIndex
+            let (first, lines) = try await stream.append(String(contents[start ..< end]))
+            streamed.removeSubrange(min(first, streamed.count)...)
+            streamed.append(contentsOf: lines)
+            start = end
+        }
+        #expect(streamed.map(\.text) == whole.map(\.text))
+        #expect(colours(streamed) == colours(whole))
+    }
 }

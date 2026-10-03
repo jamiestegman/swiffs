@@ -89,12 +89,14 @@ public final class HighlightService: Sendable {
 
     private let workers: [HighlightWorker]
     private let state: Mutex<State>
+    let registry: HighlighterRegistry
 
     public init(
         workerCount: Int = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount - 1)),
         cacheCapacity: Int = 100,
         registry: HighlighterRegistry = .shared
     ) {
+        self.registry = registry
         workers = (0 ..< max(1, workerCount)).map { _ in HighlightWorker(registry: registry) }
         state = Mutex(State(load: Array(repeating: 0, count: workers.count), cache: LRUCache(capacity: cacheCapacity)))
     }

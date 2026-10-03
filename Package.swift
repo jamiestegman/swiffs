@@ -61,6 +61,14 @@ let package = Package(
             dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsUI"],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
+        // Demo app: `swift run SwiffsDemo`.
+        .executableTarget(
+            name: "SwiffsDemo",
+            dependencies: ["SwiffsCore", "SwiffsUI"],
+            path: "Examples/SwiffsDemo",
+            resources: [.copy("Resources")],
+            swiftSettings: [.defaultIsolation(MainActor.self)]
+        ),
         .testTarget(name: "SwiffsHighlightTests", dependencies: ["SwiffsHighlight"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsCoreTests", dependencies: ["SwiffsCore"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsEditorTests", dependencies: ["SwiffsEditor"], exclude: ["Fixtures"]),

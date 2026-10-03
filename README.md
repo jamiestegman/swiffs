@@ -119,6 +119,15 @@ Scripts/visual-regression/run.sh check      # after the change
 ```
 
 
+## Demo
+
+```sh
+swift run SwiffsDemo
+```
+
+A 99-file patch with comments and Viewed checkboxes, a conflicted file to
+resolve, and a file growing as an agent would write it.
+
 ## License
 
 Apache 2.0, same as upstream. See `LICENSE.md` and `NOTICE.md`.

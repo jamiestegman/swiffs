@@ -210,10 +210,8 @@ public final class FileView<Metadata>: DiffsDocumentView {
             return
         }
         HighlightWorkerPool.shared.highlightFile(file, options: key.options, forcePlainText: key.forcePlainText) { [weak self] result in
-            MainActor.assumeIsolated {
-                guard let self, self.pendingHighlightKey == key, case .success(let value) = result else { return }
-                self.applyHighlight(value, key: key)
-            }
+            guard let self, self.pendingHighlightKey == key, case .success(let value) = result else { return }
+            self.applyHighlight(value, key: key)
         }
     }
 

@@ -54,7 +54,7 @@ public struct HighlightWorkerStats: Hashable, Sendable {
 public final class HighlightWorkerPool: Sendable {
     public static let shared = HighlightWorkerPool()
 
-    public typealias Completion<Value> = @Sendable (Result<Value, Error>) -> Void
+    public typealias Completion<Value> = @MainActor @Sendable (Result<Value, Error>) -> Void
 
     /// Unchecked because its highlighters are only used on its serial queue.
     private final class Worker: @unchecked Sendable {
@@ -165,7 +165,7 @@ public final class HighlightWorkerPool: Sendable {
         return state.withLock { $0.fileCache.get(FileCacheKey(cacheKey: cacheKey, options: options)) }
     }
 
-    /// Highlights a diff on a worker; `completion` runs on the main queue.
+    /// Highlights a diff on a worker; `completion` runs on the main actor.
     public func highlightDiff(
         _ diff: FileDiffMetadata,
         options: RenderDiffOptions,
@@ -210,7 +210,7 @@ public final class HighlightWorkerPool: Sendable {
         }
     }
 
-    /// Highlights a file on a worker; `completion` runs on the main queue.
+    /// Highlights a file on a worker; `completion` runs on the main actor.
     public func highlightFile(
         _ file: FileContents,
         options: RenderFileOptions,

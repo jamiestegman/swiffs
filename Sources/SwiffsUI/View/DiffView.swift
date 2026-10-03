@@ -47,6 +47,8 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
     /// Set when drawing changed without the layout changing.
     private var needsFullRedraw = true
     private(set) var scroll = ScrollAnimator()
+    /// A scroll asked for before the view had a size.
+    private var pendingScroll: DiffScrollTarget?
     private var displayLink: CADisplayLink?
 
     /// Highlights a growing file's new text in order, one append at a time.
@@ -242,11 +244,13 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
             return
         }
         isLayingOut = true
-        defer { isLayingOut = false }
         repeat {
             needsRelayout = false
             let width = scrollView.contentSize.width
-            guard width > 0 else { return }
+            guard width > 0 else {
+                isLayingOut = false
+                return
+            }
             layoutModel.setWidth(width)
             layoutModel.updateGeometry()
             for record in annotationHosts.values {
@@ -278,6 +282,10 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
             updateStickyHeader()
             updateTopItem()
         } while needsRelayout
+        isLayingOut = false
+        if let pendingScroll, layoutModel.contentHeight > 0 {
+            scroll(to: pendingScroll)
+        }
     }
 
     private struct Anchor {
@@ -586,6 +594,11 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
 
     /// Scrolls to an item, line or range.
     public func scroll(to target: DiffScrollTarget) {
+        guard scrollView.contentSize.width > 0, layoutModel.contentHeight > 0 else {
+            pendingScroll = target
+            return
+        }
+        pendingScroll = nil
         if case .item = target.location {} else if let id = target.itemID, layoutModel.item(id)?.hasBody == false {
             relayout(materializing: id)
         }

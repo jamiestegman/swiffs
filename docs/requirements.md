@@ -24,7 +24,7 @@ What the rebuilt view must do, and for whom ([S7](decisions.md)). Manta is the f
 
 | Feature | Use in Manta |
 | --- | --- |
-| **Conflicted files**: a file with conflict markers shown as current against incoming, with Accept current, Accept incoming and Accept both on each conflict, or custom action content. The resolution goes to the client, which writes the file | During a merge or rebase, show conflicted files in the diff and resolve the simple ones with a click. The rest go to the agent through Resolve conflicts |
+| **Conflicted files**: a file with conflict markers shown as current against incoming, with Accept current, Accept incoming and Accept both on each conflict. The resolution goes to the client, which writes the file | During a merge or rebase, show conflicted files in the diff and resolve the simple ones with a click. The rest go to the agent through Resolve conflicts |
 | **Growing files**: appended text redraws and highlights only the new tail, and earlier rows keep their layout | A file the agent is writing, shown live |
 | Hunk expansion, with full files loaded on demand for a patch | Seeing context around a change, as on GitHub |
 | Line wrapping as an option | Long lines in narrow panes |
@@ -44,3 +44,4 @@ What the rebuilt view must do, and for whom ([S7](decisions.md)). Manta is the f
 | Separate file, diff, stream and unresolved views, and a SwiftUI wrapper for each | One view over items ([S5](decisions.md)) |
 | Render lifecycle callbacks (`onPreRender`, `onPostRender`) and a "height changed" call | Inputs are values, and hosts report their own size ([S4](decisions.md)) |
 | Retained edit state across editors (`EditStateManager`) | Goes with editing |
+| Custom conflict action content | No use; the three actions are drawn natively |

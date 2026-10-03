@@ -30,88 +30,107 @@ These are not used in `SwiffsUI`, and CI rejects them: `DispatchQueue`, `Timer`,
 ```
 DiffList (SwiftUI) ── wraps ──▶ DiffView (NSView)
                                   ├─ NSScrollView
-                                  │    └─ DocumentView ── draws rows in tiles, places hosts
-                                  ├─ StickyHeader overlay
-                                  ├─ RowIndex ◀── rows from SwiffsCore, flattened across items
-                                  └─ ContentHost × n ── SwiftUI annotations and accessories
-HighlightService (SwiffsHighlight) ◀── awaited per item, prefetched ahead of scrolling
+                                  │    └─ DocumentView ── draws the rows in view, places hosted views
+                                  ├─ StickyHeaderView ── over the scroll view
+                                  ├─ DocumentLayout ── items' positions ◀── ItemModel × n ◀── rows from SwiffsCore
+                                  ├─ AnnotationHost × n, AccessoryHost × n ── SwiftUI content
+                                  └─ ScrollAnimator ── scroll targets, spring
+HighlightService (SwiffsHighlight) ◀── awaited per item before it scrolls in
 ```
 
 One view shows a list of items. An item is a diff, a file or a file with merge conflict markers. A single diff is a list of one ([S5](decisions.md)).
 
+| Type | Owns |
+| --- | --- |
+| `DiffView` | The public view: input, hosted views, highlighting tasks, scrolling, the delegate |
+| `DocumentLayout` | Items' positions in the document; which items have rows |
+| `ItemModel` | One item: parsed content, rows and their heights, highlighting, laid out lines, expanded hunks |
+| `DocumentView` | Drawing, hit testing, hover, line and text selection, copy |
+| `ItemPainter`, `HeaderPainter` | Core Text and Core Graphics drawing of one item |
+| `AnnotationHost`, `AccessoryHost` | SwiftUI content under the layout contract |
+| `DiffList` | The SwiftUI wrapper: bindings, event modifiers, the environment |
+
 ### Values in, events out
 
-- **Input** is values: `[DiffItem]` (id, content, highlight key, collapsed), `[DiffAnnotation<ID>]` (the client's id and an anchor: item, side, line) and a `DiffConfiguration` (style, theme, typography, options). Selection and scroll position are bindings.
-- **Diffing**: each input is compared with the last by id, as a diffable data source does. Unchanged items keep their layout, highlighting and hosted content. A changed item rebuilds only itself.
-- **Events** go to one `DiffViewDelegate` protocol in AppKit, and to a few view modifiers in SwiftUI. There are no closure properties, and no `Any` ([S6](decisions.md)).
+- **Input** is values ([S6](decisions.md)):
+  - `update(items:annotations:configuration:)` takes `[DiffItem]` (id, content, collapsed), `[DiffAnnotation<ID>]` (the client's id, item, side, line) and a `DiffConfiguration`;
+  - content keys its highlighting with `FileDiffMetadata.cacheKey` or `FileContents.cacheKey`;
+  - an update equal to the last does nothing.
+- **Diffing**: items are matched by id. Unchanged items keep their rows, highlighting and hosted views; a changed item rebuilds only itself.
+- **Events** go to one `DiffViewDelegate`; every method has a default. `DiffList` turns them into bindings (`selection`, `position`) and modifiers (`onDiffGutterAction`, `onDiffConflictResolution`, `diffFileLoader`). There are no closure properties and no `Any` in the API.
+- **Conflicts are values too**: an action reports the resolved file, and the client passes it back as the item's content ([S11](decisions.md)).
 
 ### Rows and heights
 
-- Each item's rows come from `SwiffsCore` (`buildDiffRows`, `buildFileRows`, merge-conflict parsing), which the fixtures already verify. The view flattens them into one row space across items. Kinds of row: item header, hunk separator, line, annotation, conflict actions, no newline, split buffer.
-- **`RowIndex`** maps between a y offset and a row in O(log n).
-  - Most rows are one line high.
-  - Rows of other heights are stored sparsely: annotations, separators, wrapped lines and conflict actions.
-  - A collapsed item contributes only its header.
-- When a row's height changes, the index updates and the first visible row stays at the same place on screen. Content changing above the viewport never moves what is being read.
+- An item's rows come from `SwiffsCore` (`buildDiffRows`, `buildFileRows`, merge-conflict parsing), which the fixtures verify.
+- **Rows are built only near the viewport** ([S12](decisions.md)).
+  - Items within the overscan build their rows and lay them out.
+  - Items farther away are estimated from their hunks. The estimate equals the built height when nothing wraps and nothing is annotated, so building rows moves nothing.
+  - Items several viewports away release their rows and laid out lines, and keep their height.
+  - A collapsed item is only its header.
+- **Lookups are binary searches**: items by y, then rows within an item. Row offsets are prefix sums per item.
+- **The read line stays put**: before laying out again, the view records the row at the top of the viewport and its offset, and restores them afterwards. Content changing above the viewport never moves what is being read.
 
 ### Drawing
 
-- Rows are drawn with Core Text into tile views.
-  - Each tile covers at most a viewport of rows, and tiles are recycled as the view scrolls.
-  - No layer grows with the file, and opaque tiles keep AppKit's responsive scrolling.
-- Lines are laid out once each (`LineLayout`, a `CTLine` per visual line), cached by item, side, line and wrap width.
+- One flipped `DocumentView` draws the items and rows that intersect the dirty rect, with Core Text. AppKit tiles its layer and keeps responsive scrolling, so no layer grows with the content ([S9](decisions.md)).
+- Hover, selection and highlighting redraw only the rows or items they change; a layout redraws only when something moved.
+- Lines are laid out once each (`LineLayout`, a `CTLine` per visual line), cached per item by side and line.
 - **Highlighting**:
-  - Until highlighting arrives, lines draw in the theme's foreground colour.
-  - Colours then fill in without changing the layout, since the font is unchanged.
-  - Items within the prefetch distance are highlighted before they scroll in.
+  - Items within the overscan and prefetch distance are highlighted on `HighlightService` before they scroll in.
+  - Content an update shows is highlighted at once when it is small (`synchronousHighlightLineLimit`), so it never appears plain. While scrolling, nothing highlights on the main thread.
+  - Until its highlighting arrives, a line draws in the theme's foreground colour. The colours then fill in without moving anything.
 
 ### Hosted content: the layout contract
 
-Annotations, header accessories and custom conflict actions are SwiftUI views. Each sits in one `ContentHost` ([S4](decisions.md)).
+Annotations and header accessories are SwiftUI views, hosted by `AnnotationHost` and `AccessoryHost` ([S4](decisions.md)).
 
 1. The document view sets every frame. Hosts are placed by frame, and the document view uses no Auto Layout.
-2. A host is created when its annotation appears in the input, keyed by the client's id. It lives until that id is gone. Moving an annotation to another line moves its host, so its SwiftUI state survives rows, scrolling and other annotations changing.
-3. On creation, a host is measured synchronously at its column's content width with `NSHostingController.sizeThatFits(in:)`. The first frame draws at the right height.
-4. From then on, the host gives its content a fixed width and its ideal height, and reports that height with `onGeometryChange`.
-   - A report sets the row height in the same layout pass.
-   - A width change reaches the content the same way.
+2. An annotation's host is created when its id appears in the input, and lives until the id is gone. Moving an annotation to another line moves its host, so its SwiftUI state survives rows, scrolling and other annotations changing.
+3. On creation, and when its column's width changes, a host is measured at the column's content width with `NSHostingController.sizeThatFits(in:)`. The frame it is drawn at is already the right height.
+4. From then on, the host gives its content that width and its ideal height, and reports the height with `onGeometryChange`.
+   - A report lays the item out again in the same layout pass.
    - Clients never call a "height changed" method.
 5. Measurement never uses `NSHostingView.fittingSize` or `intrinsicContentSize`, which ignore the width.
-6. Each input replaces a host's root view, and SwiftUI diffs it. Content that shows live state observes the client's model.
+6. Each update replaces a host's root view, and SwiftUI diffs it. Content that shows live state observes the client's model.
+7. Annotations on one line stack in input order, each at the column's full width.
+8. An accessory sits at its ideal size at the trailing edge of its item's header, and moves into the sticky header while that item is stuck.
 
-AppKit content is wrapped by the client in `NSViewRepresentable`, and sizes itself through SwiftUI like any other view.
+`DiffList` gives hosted content its own environment (`.environment(\.self, …)`), so content reads the same environment values as the rest of the app ([S10](decisions.md)). AppKit content is wrapped by the client in `NSViewRepresentable`, and sizes itself through SwiftUI like any other view.
 
 ### Interaction
 
-- Hit testing goes through the row index: a point resolves to an item, row, column and region.
-- The view handles:
+- **Hit testing** goes through the layout: a point resolves to an item, row, column and region (a line or its number, an annotation, a separator button, a conflict action, the gutter action button).
+- **The view handles**:
   - line hover;
-  - line selection (drag over numbers, `⇧`-click), on either side and across sides;
-  - the gutter action button, pinned to a selection while there is one;
-  - text selection and copy;
-  - hunk expansion;
-  - conflict actions.
+  - line selection (drag over numbers, `⇧`-click to extend, click a selected line to clear);
+  - the gutter action button, pinned to a selection while there is one, and dragged to select;
+  - text selection within one column (drag, double-click for a word, triple-click for a line) and copy;
+  - hunk expansion, loading full files first for partial diffs when `loadsFullFiles` is set;
+  - conflict actions;
+  - horizontal scrolling of an item's code.
 - **State ownership**:
-  - Presentation state lives in the view: hover, drags, text selection, expanded hunks, horizontal offsets.
+  - Presentation state lives in the view: hover, gestures, text selection, expanded hunks, horizontal offsets.
   - Client state comes in as input: items, annotations, collapsed items, line selection.
-- Rows are accessibility elements.
 
 ### Scrolling
 
-- Scroll targets are an item, a line or a range, with an alignment and an offset. They scroll instantly or smoothly.
-- Smooth scrolling is a spring stepped on the display link.
-- The sticky header is the header of the item at the top of the viewport, drawn in an overlay.
-- Code scrolls horizontally per item, with both split columns together. It is drawn at an offset, not in a nested scroll view.
+- Scroll targets are an item, a line or a range, aligned to the start, centre, end or nearest edge. They scroll instantly, smoothly, or smoothly within two viewports.
+- A line target in an item without rows builds that item's rows first.
+- Smooth scrolling is a critically damped spring stepped on the view's display link. `stepScrollAnimation(at:)` takes the time, so tests drive it frame by frame.
+- The sticky header is the header of the item at the top of the viewport, drawn in a view over the scroll view, and pushed up by the next item.
+- Code scrolls horizontally per item, with both split columns together, drawn at an offset rather than in a nested scroll view.
 
 ## Testing
 
 | What | How |
 | --- | --- |
-| Row flattening, the index, input diffing | Unit tests on values |
 | Layout contract | `DiffList` in an `NSHostingView` in a window, as apps host it. Content and width changes are asserted within one layout pass ([S8](decisions.md)) |
-| Look | `Scripts/visual-regression` against references, and `swiffs-snapshot` against upstream's rendering |
-| Interaction | `NSEvent`s sent through the window |
-| Time | An injected clock; no test sleeps |
-| Concurrency | `SwiffsHighlight` tests under Thread Sanitizer; the banned-construct check on `SwiffsUI` |
-| Performance | Scrolling and mounting a large fixture in Release, measured with Instruments' Animation Hitches, at 120 Hz |
+| Behaviour | `DiffView` in a window, driven with `NSEvent`s and inputs: virtualisation, anchoring, scrolling, selection, the gutter action, conflicts, highlighting |
+| Look | `Scripts/visual-regression` renders cases with `swiffs-snapshot` and compares them pixel for pixel; images are never committed |
+| Time | Smooth scrolling steps with given timestamps; asynchronous highlighting is awaited by yielding. No test sleeps |
+| Concurrency | `SwiffsHighlight` concurrency tests under Thread Sanitizer in CI; a test fails if `SwiffsUI` uses a banned construct |
+| Performance | Scrolling and first frame of 300 files, measured in Release against the `legacy-ui` view |
 | Parity | Golden fixtures for Core and Highlight, unchanged |
+
+`swift test --filter SwiffsUITests` runs the view's tests in about a second.

@@ -31,9 +31,48 @@ policy.
 
 ## Views
 
-`SwiffsUI` is being rebuilt as one native view over diff, file and
-conflicted-file items; see `docs/architecture.md` and `docs/plan.md`. The
-ported views are tagged `legacy-ui`.
+`SwiffsUI` is one native view over a list of items: diffs, files and files
+with merge conflict markers. `DiffList` is the SwiftUI view; `DiffView` is
+the AppKit view it wraps. See `docs/architecture.md` for the design.
+
+```swift
+import SwiffsCore
+import SwiffsUI
+import SwiftUI
+
+struct Review: View {
+    let diffs: [FileDiffMetadata]
+    let comments: [Comment]
+    @State private var selection: DiffLineSelection?
+    @State private var position = DiffScrollPosition()
+
+    var body: some View {
+        DiffList(
+            diffs.map { .diff($0) },
+            annotations: comments.map { DiffAnnotation(id: $0.id, itemID: $0.path, side: .additions, lineNumber: $0.line) },
+            selection: $selection,
+            position: $position
+        ) { id in
+            CommentView(id: id)
+        } headerAccessory: { item in
+            ViewedToggle(path: item.id)
+        }
+        .onDiffGutterAction { lines in startComment(on: lines) }
+    }
+}
+```
+
+- Items, annotations and configuration are values. Updates keep everything
+  that did not change, including annotation views and their state.
+- Annotations are SwiftUI views, measured at their column's width and
+  following their content's size; there is nothing to call when they change.
+- Selection and scroll position are bindings; actions arrive through
+  modifiers (`onDiffGutterAction`, `onDiffConflictResolution`,
+  `diffFileLoader`) or, for `DiffView`, its `DiffViewDelegate`.
+- Highlighting runs on `HighlightService`, ahead of scrolling. Give content a
+  `cacheKey` to share results across views and refreshes.
+
+The ported views are tagged `legacy-ui`.
 
 ## Parity
 
@@ -60,17 +99,25 @@ Highlighting matches Shiki token for token, and is organized for native use:
   token styles are stored inline.
 - Short lines are matched with Oniguruma's `OnigRegSet`, like
   vscode-oniguruma.
-- Diffs highlight on a background worker pool (with an LRU cache keyed by
-  `cacheKey`); large diffs tokenize their two sides concurrently. Requests for
-  a result already being computed wait for it, and a view takes a cached
-  result before highlighting anything itself.
+- `HighlightService` highlights on a bounded set of worker actors, with an
+  LRU cache keyed by `cacheKey`; large diffs tokenize their two sides
+  concurrently. Requests for a result already being computed share it.
 
 ## Testing
 
-`swift test` runs the parity suites against golden fixtures generated from
+`swift test --filter SwiffsUITests` runs the view's tests in about a second.
+`swift test` runs everything, including the parity suites against golden fixtures generated from
 upstream (`Scripts/fixtures`), including a render stress fixture (Unicode,
 line endings, tabs, long lines, 35 languages) and concurrency invariance
 tests.
+
+Rendering changes are gated by pixel comparison; images are never committed:
+
+```sh
+Scripts/visual-regression/run.sh baseline   # on a known-good commit
+Scripts/visual-regression/run.sh check      # after the change
+```
+
 
 ## License
 

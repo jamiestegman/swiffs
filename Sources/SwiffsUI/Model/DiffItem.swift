@@ -13,6 +13,8 @@ nonisolated public struct DiffItem: Identifiable, Equatable, Sendable {
         case conflicted(FileContents)
     }
 
+    /// Identifies the item across updates. Ids are unique within a list; an
+    /// item repeating an earlier id is not shown.
     public var id: String
     public var content: Content
     /// Shows only the item's header.

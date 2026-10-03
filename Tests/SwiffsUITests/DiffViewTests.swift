@@ -98,6 +98,12 @@ struct VirtualisationTests {
         #expect(harness.item("f0.swift")?.hasBody == false, "rows far behind the viewport are released")
     }
 
+    @Test func aRepeatedIdIsNotShown() throws {
+        let harness = Harness([.diff(try Fixtures.diff(step: 3)), .diff(try Fixtures.diff(step: 5))])
+        #expect(harness.view.layoutModel.items.count == 1)
+        #expect(harness.item("a.swift")?.diff == (try Fixtures.diff(step: 3)))
+    }
+
     @Test func collapsedItemsShowOnlyTheirHeader() throws {
         let harness = Harness([.diff(try Fixtures.diff(), isCollapsed: true)])
         #expect(harness.item("a.swift")?.height == Metrics.headerHeight)

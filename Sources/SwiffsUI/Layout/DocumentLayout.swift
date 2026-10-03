@@ -32,7 +32,8 @@ final class DocumentLayout {
         var previous = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         var changed: [ItemModel] = []
         var grown: [(ItemModel, String)] = []
-        items = newItems.map { newItem in
+        var seen: Set<String> = []
+        items = newItems.filter { seen.insert($0.id).inserted }.map { newItem in
             let model: ItemModel
             if let existing = previous.removeValue(forKey: newItem.id) {
                 switch existing.update(newItem, configuration: configuration) {

@@ -4,19 +4,14 @@ import SwiffsCore
 /// nil when annotations cannot be compared (their metadata is not
 /// `Equatable`), so every annotation view is rebuilt.
 func changedAnnotationKeys<Annotation>(_ old: [AnnotationKey: [Annotation]], _ new: [AnnotationKey: [Annotation]]) -> Set<AnnotationKey>? {
-    var changed: Set<AnnotationKey> = []
-    for key in Set(old.keys).union(new.keys) {
-        guard let same = equal(old[key] ?? [], new[key] ?? []) else { return nil }
-        if !same { changed.insert(key) }
-    }
-    return changed
+    guard let comparable = Annotation.self as? any Equatable.Type else { return nil }
+    return changedKeys(as: comparable, old, new)
 }
 
-private func equal<Annotation>(_ a: [Annotation], _ b: [Annotation]) -> Bool? {
-    guard let a = a as? any Equatable else { return nil }
-    return isEqual(a, b)
-}
-
-private func isEqual<T: Equatable>(_ a: T, _ b: Any) -> Bool {
-    (b as? T) == a
+private func changedKeys<Comparable: Equatable, Annotation>(
+    as _: Comparable.Type, _ old: [AnnotationKey: [Annotation]], _ new: [AnnotationKey: [Annotation]]
+) -> Set<AnnotationKey> {
+    Set(Set(old.keys).union(new.keys).filter { key in
+        (old[key] ?? []) as! [Comparable] != (new[key] ?? []) as! [Comparable]
+    })
 }

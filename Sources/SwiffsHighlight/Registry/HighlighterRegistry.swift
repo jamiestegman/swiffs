@@ -3,6 +3,7 @@
 
 import Foundation
 import SwiffsCore
+import Synchronization
 
 /// Loads grammar registrations for a custom language (dependencies first).
 public typealias LanguageLoader = @Sendable () throws -> [LanguageRegistration]
@@ -17,20 +18,26 @@ public struct ResolvedLanguage: @unchecked Sendable {
 
 /// Process-wide registry of languages and themes, equivalent to the module
 /// level maps in `highlighter/languages` and `highlighter/themes`.
-public final class HighlighterRegistry: @unchecked Sendable {
+public final class HighlighterRegistry: Sendable {
     public static let shared = HighlighterRegistry()
 
-    private let lock = NSRecursiveLock()
-    private var customLanguages: [String: LanguageLoader] = [:]
-    private var customThemes: [String: ThemeLoader] = [:]
-    private var resolvedLanguages: [String: ResolvedLanguage] = [:]
-    private var resolvedThemes: [String: ThemeRegistration] = [:]
-    private(set) var generation = 0
-    /// Languages any highlighter has attached, in first-attach order.
-    private var attachedLanguageList: [String] = []
-    private var attachedLanguageSet: Set<String> = []
+    private struct State {
+        var customLanguages: [String: LanguageLoader] = [:]
+        var customThemes: [String: ThemeLoader] = [:]
+        var resolvedLanguages: [String: ResolvedLanguage] = [:]
+        var resolvedThemes: [String: ThemeRegistration] = [:]
+        var generation = 0
+        /// Languages any highlighter has attached, in first-attach order.
+        var attachedLanguageList: [String] = []
+        var attachedLanguageSet: Set<String> = []
+    }
+
+    private let state = Mutex(State())
 
     public init() {}
+
+    /// Changes whenever languages or themes are registered or cleaned up.
+    var generation: Int { state.withLock { $0.generation } }
 
     // MARK: Languages
 
@@ -40,13 +47,15 @@ public final class HighlighterRegistry: @unchecked Sendable {
         if lang == "text" || lang == "ansi" {
             throw DiffsHighlightError("registerCustomLanguage: 'text' and 'ansi' are reserved language names")
         }
-        lock.withLock {
-            if customLanguages[lang] != nil {
-                HighlightDiagnostics.report("registerCustomLanguage: lang: \(lang) is already registered")
-                return
-            }
-            customLanguages[lang] = loader
-            generation += 1
+        let registered = state.withLock { state in
+            guard state.customLanguages[lang] == nil else { return false }
+            state.customLanguages[lang] = loader
+            state.generation += 1
+            return true
+        }
+        guard registered else {
+            HighlightDiagnostics.report("registerCustomLanguage: lang: \(lang) is already registered")
+            return
         }
         for ext in extensionsOrFilenames {
             FileTypes.setCustomExtension(ext, lang)
@@ -56,8 +65,8 @@ public final class HighlighterRegistry: @unchecked Sendable {
     /// `resolveLanguage`: loads a language's grammars (custom first, then
     /// bundled) and caches the result.
     public func resolveLanguage(_ lang: String) throws -> ResolvedLanguage {
-        if let cached = lock.withLock({ resolvedLanguages[lang] }) { return cached }
-        let loader = lock.withLock { customLanguages[lang] }
+        let (cached, loader) = state.withLock { ($0.resolvedLanguages[lang], $0.customLanguages[lang]) }
+        if let cached { return cached }
         let data: [LanguageRegistration]
         if let loader {
             data = try loader()
@@ -67,9 +76,9 @@ public final class HighlighterRegistry: @unchecked Sendable {
             throw DiffsHighlightError("resolveLanguage: \"\(lang)\" not found in bundled or custom languages")
         }
         let resolved = ResolvedLanguage(name: lang, data: data)
-        return lock.withLock {
-            if let existing = resolvedLanguages[lang] { return existing }
-            resolvedLanguages[lang] = resolved
+        return state.withLock { state in
+            if let existing = state.resolvedLanguages[lang] { return existing }
+            state.resolvedLanguages[lang] = resolved
             return resolved
         }
     }
@@ -79,26 +88,26 @@ public final class HighlighterRegistry: @unchecked Sendable {
     /// to every render (which decides whether lazily embedded code, such as
     /// Markdown fences, is highlighted). Highlighters here attach the same set.
     func recordAttachedLanguages(_ langs: [String]) {
-        lock.withLock {
-            for lang in langs where attachedLanguageSet.insert(lang).inserted {
-                attachedLanguageList.append(lang)
+        state.withLock { state in
+            for lang in langs where state.attachedLanguageSet.insert(lang).inserted {
+                state.attachedLanguageList.append(lang)
             }
         }
     }
 
     /// Languages attached by any highlighter, from `index` on.
     func attachedLanguages(from index: Int) -> ArraySlice<String> {
-        lock.withLock { attachedLanguageList[min(index, attachedLanguageList.count)...] }
+        state.withLock { $0.attachedLanguageList[min(index, $0.attachedLanguageList.count)...] }
     }
 
     public func hasResolvedLanguages(_ langs: [String]) -> Bool {
-        lock.withLock { langs.allSatisfy { resolvedLanguages[$0] != nil } }
+        state.withLock { state in langs.allSatisfy { state.resolvedLanguages[$0] != nil } }
     }
 
     public func getResolvedLanguages(_ langs: [String]) throws -> [ResolvedLanguage] {
-        try lock.withLock {
+        try state.withLock { state in
             try langs.map { lang in
-                guard let resolved = resolvedLanguages[lang] else {
+                guard let resolved = state.resolvedLanguages[lang] else {
                     throw DiffsHighlightError(
                         "getResolvedLanguages: \(lang) is not resolved. Please resolve languages before calling getResolvedLanguages"
                     )
@@ -111,13 +120,13 @@ public final class HighlighterRegistry: @unchecked Sendable {
     /// Whether a language can be resolved (bundled or registered).
     public func isKnownLanguage(_ lang: String) -> Bool {
         if lang == "text" || lang == "ansi" { return true }
-        return lock.withLock { customLanguages[lang] != nil } || BundledData.hasLanguage(lang)
+        return state.withLock { $0.customLanguages[lang] != nil } || BundledData.hasLanguage(lang)
     }
 
     public func cleanUpResolvedLanguages() {
-        lock.withLock {
-            resolvedLanguages.removeAll()
-            generation += 1
+        state.withLock { state in
+            state.resolvedLanguages.removeAll()
+            state.generation += 1
         }
     }
 
@@ -125,13 +134,14 @@ public final class HighlighterRegistry: @unchecked Sendable {
 
     /// Registers a named custom theme loader (`registerCustomTheme`).
     public func registerCustomTheme(_ themeName: String, loader: @escaping ThemeLoader) {
-        lock.withLock {
-            if customThemes[themeName] != nil {
-                HighlightDiagnostics.report("SharedHighlight.registerCustomTheme: theme name already registered \(themeName)")
-                return
-            }
-            customThemes[themeName] = loader
-            generation += 1
+        let registered = state.withLock { state in
+            guard state.customThemes[themeName] == nil else { return false }
+            state.customThemes[themeName] = loader
+            state.generation += 1
+            return true
+        }
+        if !registered {
+            HighlightDiagnostics.report("SharedHighlight.registerCustomTheme: theme name already registered \(themeName)")
         }
     }
 
@@ -142,8 +152,8 @@ public final class HighlighterRegistry: @unchecked Sendable {
 
     /// `resolveTheme`: loads and normalizes a theme by name.
     public func resolveTheme(_ themeName: String) throws -> ThemeRegistration {
-        if let cached = lock.withLock({ resolvedThemes[themeName] }) { return cached }
-        let loader = lock.withLock { customThemes[themeName] }
+        let (cached, loader) = state.withLock { ($0.resolvedThemes[themeName], $0.customThemes[themeName]) }
+        if let cached { return cached }
         var theme: ThemeRegistration
         if let loader {
             theme = try loader()
@@ -165,9 +175,9 @@ public final class HighlighterRegistry: @unchecked Sendable {
             colors: theme.colors,
             colorReplacements: theme.colorReplacements
         )
-        return lock.withLock {
-            if let existing = resolvedThemes[themeName] { return existing }
-            resolvedThemes[themeName] = theme
+        return state.withLock { state in
+            if let existing = state.resolvedThemes[themeName] { return existing }
+            state.resolvedThemes[themeName] = theme
             return theme
         }
     }
@@ -177,13 +187,13 @@ public final class HighlighterRegistry: @unchecked Sendable {
     }
 
     public func hasResolvedThemes(_ names: [String]) -> Bool {
-        lock.withLock { names.allSatisfy { resolvedThemes[$0] != nil } }
+        state.withLock { state in names.allSatisfy { state.resolvedThemes[$0] != nil } }
     }
 
     public func getResolvedThemes(_ names: [String]) throws -> [ThemeRegistration] {
-        try lock.withLock {
+        try state.withLock { state in
             try names.map { name in
-                guard let theme = resolvedThemes[name] else {
+                guard let theme = state.resolvedThemes[name] else {
                     throw DiffsHighlightError("getResolvedThemes: \(name) is not resolved")
                 }
                 return theme
@@ -192,15 +202,15 @@ public final class HighlighterRegistry: @unchecked Sendable {
     }
 
     public func cleanUpResolvedThemes() {
-        lock.withLock {
-            resolvedThemes.removeAll()
-            generation += 1
+        state.withLock { state in
+            state.resolvedThemes.removeAll()
+            state.generation += 1
         }
     }
 
     /// Names of every available theme (bundled and custom).
     public var availableThemes: [String] {
-        let custom = lock.withLock { Array(customThemes.keys) }
+        let custom = state.withLock { Array($0.customThemes.keys) }
         return BundledData.themes.map(\.id) + custom.sorted()
     }
 }

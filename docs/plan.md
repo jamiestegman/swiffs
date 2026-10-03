@@ -13,6 +13,6 @@ Each step ends with `swift test` passing and its docs true. Manta stays on its p
 - [x] R6 `DiffList`, `swiffs-snapshot` and `SwiffsDemo`; Manta moves to `DiffList` and deletes its own wrapper (on Manta's `swiffs-native-ui` branch, pinned to this module's first complete commit)
 - [x] R7 Conflicted files
 - [x] R8 Growing files
-- [ ] R9 Tag `0.1.0`
+- [x] R9 Tag `0.1.0`
 
 Later: editing ([requirements](requirements.md#later-waits-for-a-user)).

@@ -66,6 +66,8 @@ nonisolated public struct DiffConfiguration: Equatable {
     /// A button beside the hovered line, or the selection's last line, that
     /// reports a gutter action.
     public var showsGutterAction = false
+    /// What assistive technologies call the gutter action.
+    public var gutterActionLabel = "Line action"
     /// Lines longer than this are not tokenized.
     public var tokenizeMaxLineLength = 1000
     /// Content with more lines than this is shown as plain text.

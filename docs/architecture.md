@@ -109,6 +109,7 @@ Annotations and header accessories are SwiftUI views, hosted by `AnnotationHost`
   - hunk expansion, loading full files first for partial diffs when `loadsFullFiles` is set;
   - conflict actions;
   - horizontal scrolling of an item's code.
+- **Accessibility**: the document reads as a list in document order. Each item's header carries the item's expand and conflict actions as custom actions; then come its visible lines (label `Line 12, added`, value the code, with the gutter action as a custom action) and its annotation views. No accessibility element is subclassed, since `NSAccessibilityElement` is not main-actor isolated.
 - **State ownership**:
   - Presentation state lives in the view: hover, gestures, text selection, expanded hunks, horizontal offsets.
   - Client state comes in as input: items, annotations, collapsed items, line selection.

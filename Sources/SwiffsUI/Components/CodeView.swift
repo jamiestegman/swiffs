@@ -718,16 +718,17 @@ public final class CodeView<Metadata>: NSView {
         guard !state.item.collapsed else { return }
         switch state.item.content {
         case .diff(let diff, _):
-            guard let key = diff.cacheKey, key != state.prefetchedKey,
-                  max(diff.additionLines.count, diff.deletionLines.count) <= options.diff.code.tokenizeMaxLength
-            else { return }
+            guard let key = diff.cacheKey, key != state.prefetchedKey else { return }
             state.prefetchedKey = key
-            HighlightWorkerPool.shared.highlightDiff(diff, options: options.diff.renderDiffOptions) { _ in }
+            let request = options.diff.highlightRequest(for: diff)
+            guard !request.forcePlainText else { return }
+            HighlightWorkerPool.shared.highlightDiff(diff, options: request.options) { _ in }
         case .file(let file, _):
-            let code = options.fileOptions
-            guard let key = file.cacheKey, key != state.prefetchedKey, linesFromFileContents(file.contents).count <= code.tokenizeMaxLength else { return }
+            guard let key = file.cacheKey, key != state.prefetchedKey else { return }
             state.prefetchedKey = key
-            HighlightWorkerPool.shared.highlightFile(file, options: RenderFileOptions(theme: code.theme, tokenizeMaxLineLength: code.tokenizeMaxLineLength)) { _ in }
+            let request = options.fileOptions.highlightRequest(for: file, lineCount: linesFromFileContents(file.contents).count)
+            guard !request.forcePlainText else { return }
+            HighlightWorkerPool.shared.highlightFile(file, options: request.options) { _ in }
         }
     }
 

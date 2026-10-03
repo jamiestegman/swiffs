@@ -47,18 +47,12 @@ public final class FileView<Metadata>: DiffsDocumentView {
     private var lines: [String] = []
     private var rowsResult: FileRowsResult?
     private var highlightResult: ThemedFileResult?
-    private var highlightKey: HighlightKey?
-    private var pendingHighlightKey: HighlightKey?
+    private var highlightKey: FileHighlightRequest?
+    private var pendingHighlightKey: FileHighlightRequest?
     private var annotationsByLine: [Int: [Annotation]] = [:]
     private var plainLineCache: [Int: HighlightedLine] = [:]
     /// The attached editor (`DiffsEditor.edit`); retained until it cleans up.
     private var editorSource: EditorLineSource?
-
-    private struct HighlightKey: Equatable {
-        var file: FileContents
-        var options: RenderFileOptions
-        var forcePlainText: Bool
-    }
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -201,22 +195,14 @@ public final class FileView<Metadata>: DiffsDocumentView {
 
     private func requestHighlight(force: Bool = false) {
         guard let file else { return }
-        let renderOptions = RenderFileOptions(theme: options.theme, tokenizeMaxLineLength: options.tokenizeMaxLineLength)
-        let key = HighlightKey(file: file, options: renderOptions, forcePlainText: lines.count > options.tokenizeMaxLength)
+        let key = options.highlightRequest(for: file, lineCount: lines.count)
         if !force, key == highlightKey || key == pendingHighlightKey { return }
         pendingHighlightKey = key
-        if !key.forcePlainText, let cached = HighlightWorkerPool.shared.cachedFileResult(file, options: renderOptions) {
-            applyHighlight(cached, key: key)
-            return
-        }
-        if lines.count <= synchronousHighlightLineLimit, !key.forcePlainText,
-           let result = try? MainThreadHighlighter.shared.renderFile(file, options: renderOptions)
-        {
-            HighlightWorkerPool.shared.storeFileResult(result, for: file, options: renderOptions)
+        if let result = HighlightWorkerPool.shared.immediateResult(for: key, synchronousLineLimit: synchronousHighlightLineLimit) {
             applyHighlight(result, key: key)
             return
         }
-        HighlightWorkerPool.shared.highlightFile(file, options: renderOptions, forcePlainText: key.forcePlainText) { [weak self] result in
+        HighlightWorkerPool.shared.highlightFile(file, options: key.options, forcePlainText: key.forcePlainText) { [weak self] result in
             MainActor.assumeIsolated {
                 guard let self, self.pendingHighlightKey == key, case .success(let value) = result else { return }
                 self.applyHighlight(value, key: key)
@@ -224,7 +210,7 @@ public final class FileView<Metadata>: DiffsDocumentView {
         }
     }
 
-    private func applyHighlight(_ result: ThemedFileResult, key: HighlightKey) {
+    private func applyHighlight(_ result: ThemedFileResult, key: FileHighlightRequest) {
         highlightResult = result
         highlightKey = key
         pendingHighlightKey = nil

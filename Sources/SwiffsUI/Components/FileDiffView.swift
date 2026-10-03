@@ -58,8 +58,8 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
     private var expandedHunks: [Int: HunkExpansionRegion] = [:]
     private var rowsResult: DiffRowsResult?
     private var highlightResult: ThemedDiffResult?
-    private var highlightKey: HighlightKey?
-    private var pendingHighlightKey: HighlightKey?
+    private var highlightKey: DiffHighlightRequest?
+    private var pendingHighlightKey: DiffHighlightRequest?
     private var annotationsByKey: [AnnotationKey: [Annotation]] = [:]
     private var plainLineCache: [AnnotationSide: [Int: HighlightedLine]] = [:]
     /// The attached editor (`DiffsEditor.edit`); retained until it cleans up.
@@ -68,12 +68,6 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
     /// valid for the whole session).
     private var editorOriginalHighlight: ThemedDiffResult?
     private var editorOriginalDiff: FileDiffMetadata?
-
-    private struct HighlightKey: Equatable {
-        var diff: FileDiffMetadata
-        var options: RenderDiffOptions
-        var forcePlainText: Bool
-    }
 
     /// Diffs at or below this many lines highlight synchronously so the first
     /// paint is already highlighted.
@@ -444,30 +438,16 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
 
     // MARK: - Highlighting
 
-    private var isMassive: Bool {
-        guard let fileDiff else { return false }
-        return max(fileDiff.additionLines.count, fileDiff.deletionLines.count) > options.code.tokenizeMaxLength
-    }
-
     private func requestHighlight(force: Bool = false) {
         guard let fileDiff else { return }
         let hasContent = !fileDiff.additionLines.isEmpty || !fileDiff.deletionLines.isEmpty
         guard hasContent else { return }
-        let key = HighlightKey(diff: fileDiff, options: effectiveOptions.renderDiffOptions, forcePlainText: isMassive)
+        let key = effectiveOptions.highlightRequest(for: fileDiff)
         if !force, key == highlightKey || key == pendingHighlightKey { return }
         pendingHighlightKey = key
-        if !key.forcePlainText, let cached = HighlightWorkerPool.shared.cachedDiffResult(fileDiff, options: key.options) {
-            applyHighlight(cached, key: key)
+        if let result = HighlightWorkerPool.shared.immediateResult(for: key, synchronousLineLimit: synchronousHighlightLineLimit) {
+            applyHighlight(result, key: key)
             return
-        }
-        let lineCount = max(fileDiff.additionLines.count, fileDiff.deletionLines.count)
-        if lineCount <= synchronousHighlightLineLimit, !key.forcePlainText {
-            let highlighter = MainThreadHighlighter.shared
-            if let result = try? highlighter.renderDiff(fileDiff, options: key.options) {
-                HighlightWorkerPool.shared.storeDiffResult(result, for: fileDiff, options: key.options)
-                applyHighlight(result, key: key)
-                return
-            }
         }
         HighlightWorkerPool.shared.highlightDiff(fileDiff, options: key.options, forcePlainText: key.forcePlainText) { [weak self] result in
             MainActor.assumeIsolated {
@@ -477,7 +457,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         }
     }
 
-    private func applyHighlight(_ result: ThemedDiffResult, key: HighlightKey) {
+    private func applyHighlight(_ result: ThemedDiffResult, key: DiffHighlightRequest) {
         highlightResult = result
         highlightKey = key
         pendingHighlightKey = nil
@@ -567,13 +547,6 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
     override var gridHandlesGutterUtilityClicks: Bool { onGutterUtilityClick != nil }
     override var gridHandlesTokenEvents: Bool { onTokenClick != nil || onTokenEnter != nil || onTokenLeave != nil }
     override var gridHandlesLineHoverEvents: Bool { onLineEnter != nil || onLineLeave != nil }
-}
-
-/// A highlighter confined to the main thread, used for small synchronous
-/// renders.
-@MainActor
-final class MainThreadHighlighter {
-    static let shared = DiffsHighlighter()
 }
 
 // MARK: - Editor host

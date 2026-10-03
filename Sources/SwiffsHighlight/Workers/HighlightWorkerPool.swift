@@ -129,19 +129,34 @@ public final class HighlightWorkerPool: @unchecked Sendable {
         return lock.withLock { diffCache.get(DiffCacheKey(cacheKey: cacheKey, options: options)) }
     }
 
-    /// Keeps a keyed diff's result computed elsewhere (such as on the main
-    /// thread), so later requests reuse it.
-    public func storeDiffResult(_ result: ThemedDiffResult, for diff: FileDiffMetadata, options: RenderDiffOptions) {
-        guard let cacheKey = diff.cacheKey else { return }
-        lock.withLock { diffCache.set(DiffCacheKey(cacheKey: cacheKey, options: options), result) }
+    /// A result available now: the cached one, or, for content of at most
+    /// `synchronousLineLimit` lines, one highlighted on the main thread and
+    /// cached. Nil means the request should go to `highlightDiff`.
+    @MainActor
+    public func immediateResult(for request: DiffHighlightRequest, synchronousLineLimit: Int) -> ThemedDiffResult? {
+        guard !request.forcePlainText else { return nil }
+        if let cached = cachedDiffResult(request.diff, options: request.options) { return cached }
+        guard request.lineCount <= synchronousLineLimit, let result = try? Self.mainThreadHighlighter.renderDiff(request.diff, options: request.options) else { return nil }
+        if let cacheKey = request.diff.cacheKey {
+            lock.withLock { diffCache.set(DiffCacheKey(cacheKey: cacheKey, options: request.options), result) }
+        }
+        return result
     }
 
-    /// Keeps a keyed file's result computed elsewhere, so later requests
-    /// reuse it.
-    public func storeFileResult(_ result: ThemedFileResult, for file: FileContents, options: RenderFileOptions) {
-        guard let cacheKey = file.cacheKey else { return }
-        lock.withLock { fileCache.set(FileCacheKey(cacheKey: cacheKey, options: options), result) }
+    /// A file's counterpart of `immediateResult(for:synchronousLineLimit:)`.
+    @MainActor
+    public func immediateResult(for request: FileHighlightRequest, synchronousLineLimit: Int) -> ThemedFileResult? {
+        guard !request.forcePlainText else { return nil }
+        if let cached = cachedFileResult(request.file, options: request.options) { return cached }
+        guard request.lineCount <= synchronousLineLimit, let result = try? Self.mainThreadHighlighter.renderFile(request.file, options: request.options) else { return nil }
+        if let cacheKey = request.file.cacheKey {
+            lock.withLock { fileCache.set(FileCacheKey(cacheKey: cacheKey, options: request.options), result) }
+        }
+        return result
     }
+
+    /// Highlights small content synchronously on the main thread.
+    @MainActor private static let mainThreadHighlighter = DiffsHighlighter()
 
     public func cachedFileResult(_ file: FileContents, options: RenderFileOptions) -> ThemedFileResult? {
         guard let cacheKey = file.cacheKey else { return nil }

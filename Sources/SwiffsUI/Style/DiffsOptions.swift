@@ -93,6 +93,11 @@ public struct DiffsDiffOptions: Equatable, @unchecked Sendable {
         )
     }
 
+    /// How a view with these options asks for a diff's highlighting.
+    func highlightRequest(for diff: FileDiffMetadata) -> DiffHighlightRequest {
+        DiffHighlightRequest(diff: diff, options: renderDiffOptions, tokenizeMaxLength: code.tokenizeMaxLength)
+    }
+
     var renderDiffOptions: RenderDiffOptions {
         RenderDiffOptions(
             theme: code.theme,
@@ -130,4 +135,13 @@ public struct DiffsTokenEvent: Hashable, Sendable {
 public struct DiffsHoveredLine: Hashable, Sendable {
     public var lineNumber: Int
     public var side: AnnotationSide?
+}
+
+extension DiffsCodeOptions {
+    /// How a view with these options asks for a file's highlighting.
+    func highlightRequest(for file: FileContents, lineCount: Int) -> FileHighlightRequest {
+        FileHighlightRequest(
+            file: file, options: RenderFileOptions(theme: theme, tokenizeMaxLineLength: tokenizeMaxLineLength), lineCount: lineCount,
+            tokenizeMaxLength: tokenizeMaxLength)
+    }
 }

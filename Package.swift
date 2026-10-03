@@ -10,7 +10,6 @@ let package = Package(
         .library(name: "SwiffsCore", targets: ["SwiffsCore"]),
         .library(name: "SwiffsHighlight", targets: ["SwiffsHighlight"]),
         .library(name: "SwiffsEditor", targets: ["SwiffsEditor"]),
-        .library(name: "SwiffsUI", targets: ["SwiffsUI"]),
     ],
     targets: [
         // Pure Swift diff model, patch parsing and diff algorithms. Foundation
@@ -49,26 +48,8 @@ let package = Package(
             name: "SwiffsEditor",
             dependencies: ["SwiffsCore", "SwiffsHighlight"]
         ),
-        // AppKit views: FileDiffView, FileView, CodeView and SwiftUI wrappers.
-        .target(
-            name: "SwiffsUI",
-            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsEditor"]
-        ),
-        // Development tool: renders views offscreen to PNG for visual checks.
-        .executableTarget(
-            name: "swiffs-snapshot",
-            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsEditor", "SwiffsUI"]
-        ),
-        // Demo app: `swift run SwiffsDemo`.
-        .executableTarget(
-            name: "SwiffsDemo",
-            dependencies: ["SwiffsCore", "SwiffsHighlight", "SwiffsEditor", "SwiffsUI"],
-            path: "Examples/SwiffsDemo",
-            resources: [.copy("Resources")]
-        ),
         .testTarget(name: "SwiffsHighlightTests", dependencies: ["SwiffsHighlight"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsCoreTests", dependencies: ["SwiffsCore"], exclude: ["Fixtures"]),
         .testTarget(name: "SwiffsEditorTests", dependencies: ["SwiffsEditor"], exclude: ["Fixtures"]),
-        .testTarget(name: "SwiffsUITests", dependencies: ["SwiffsCore", "SwiffsEditor", "SwiffsUI"]),
     ]
 )

@@ -15,7 +15,6 @@ Swiffs is structured like a native library with a UI-free core
 | `SwiffsCore`      | Diff data model, patch parsing, jsdiff port (Myers), hunk layout, rows, merge conflicts, live diff edit sessions, colors. Foundation only. |
 | `SwiffsHighlight` | Shiki port: TextMate tokenizer (vscode-textmate) on vendored Oniguruma, 242 bundled grammars, 75 themes, stream tokenizer, worker pool. |
 | `SwiffsEditor`    | Editor model: piece table, text document, undo history, selections, keymaps, comments, bracket matching, incremental tokenizer, edit prediction. |
-| `SwiffsUI`        | AppKit views and SwiftUI wrappers. |
 | `COniguruma`      | Vendored Oniguruma 6.9.10 regex engine. |
 
 ## Requirements
@@ -34,49 +33,7 @@ policy.
 
 `SwiffsUI` is being rebuilt as one native view over diff, file and
 conflicted-file items; see `docs/architecture.md` and `docs/plan.md`. The
-views below are the ported ones it replaces.
-
-| Upstream              | Swiffs |
-| --------------------- | ------ |
-| `FileDiff`            | `FileDiffView` / `DiffsFileDiff` (SwiftUI) |
-| `File`                | `FileView` / `DiffsFile` |
-| `CodeView`            | `CodeView` / `DiffsCodeList` (virtualized, sticky headers, smooth scrolling, item editing) |
-| `FileStream`          | `FileStreamView` / `DiffsFileStream` |
-| `UnresolvedFile`      | `UnresolvedFileView` / `DiffsUnresolvedFile` |
-| `Editor`              | `DiffsEditor` (attach with `editor.edit(view)`) |
-
-```swift
-import SwiffsCore
-import SwiffsUI
-
-let view = FileDiffView<Void>()
-try view.render(oldFile: FileContents(name: "a.ts", contents: old),
-                newFile: FileContents(name: "a.ts", contents: new))
-
-// Make the new side editable.
-let editor = DiffsEditor<DiffLineAnnotation<Void>>()
-view.onEditComplete = { event in
-    save(event.newFile)
-    return .accept
-}
-let complete = editor.edit(view)
-```
-
-Annotation views are measured when they are added. When one's content
-changes size, call `noteHeightOfAnnotationsChanged()` on its file view, or
-`noteHeightOfAnnotationsChanged(inItem:)` on a `CodeView`, as with
-`NSTableView.noteHeightOfRows(withIndexesChanged:)`.
-
-An annotation keeps its view while it is unchanged, so state in the view (a
-comment being typed) survives other annotations and rows changing. Swiffs
-compares annotations when their metadata is `Equatable` and otherwise
-rebuilds every annotation view when annotations are set. A view that shows
-live state should observe it rather than capture it, since an unchanged
-annotation is not asked for its view again.
-
-Pass `editStateKey:` to keep a session's document, undo history, selections
-and diff hunks in `EditStateManager.shared` after it ends; a later editor
-with the same key resumes it.
+ported views are tagged `legacy-ui`.
 
 ## Parity
 
@@ -89,9 +46,6 @@ environment variables, for example:
 PIERRE_DIR=/path/to/pierre OUT_DIR=Tests/SwiffsCoreTests/Fixtures \
   bun Scripts/fixtures/generate-core-fixtures.ts
 ```
-
-Rendering is compared against headless-browser screenshots of the published
-package with `swift run swiffs-snapshot <case.json> <out.png>`.
 
 ## Performance
 
@@ -110,10 +64,6 @@ Highlighting matches Shiki token for token, and is organized for native use:
   `cacheKey`); large diffs tokenize their two sides concurrently. Requests for
   a result already being computed wait for it, and a view takes a cached
   result before highlighting anything itself.
-- `CodeView` highlights items on the worker pool before they scroll into view
-  (`CodeViewOptions.prefetch`, one viewport height beyond the overscan by
-  default), so a scroll mounts files already highlighted. Give diffs a
-  `cacheKey` (`parsePatchFiles(_:cacheKeyPrefix:)`) for this to apply.
 
 ## Testing
 
@@ -121,19 +71,6 @@ Highlighting matches Shiki token for token, and is organized for native use:
 upstream (`Scripts/fixtures`), including a render stress fixture (Unicode,
 line endings, tabs, long lines, 35 languages) and concurrency invariance
 tests.
-
-Rendering changes are gated by pixel comparison:
-
-```sh
-Scripts/visual-regression/run.sh baseline   # on a known-good commit
-Scripts/visual-regression/run.sh check      # after the change
-```
-
-## Demo
-
-```sh
-swift run SwiffsDemo
-```
 
 ## License
 

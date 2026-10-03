@@ -520,11 +520,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         let views = cell.keys.flatMap { annotationsByKey[$0] ?? [] }.compactMap(renderAnnotation)
         if views.isEmpty { return nil }
         if views.count == 1 { return views[0] }
-        let stack = NSStackView(views: views)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 0
-        return stack
+        return AnnotationStackView(views: views)
     }
 
     override func grid(_ grid: CodeGridView, expandHunk hunkIndex: Int, direction: ExpansionDirection, all: Bool) {

@@ -86,4 +86,35 @@ struct FileDiffViewTests {
         #expect(notes() == ["tall"], "An annotation's view is rebuilt when its annotations change, not only when its line does")
         #expect(view.grid.frame.height == before + 40)
     }
+
+    @Test func annotationsSharingALineEachFillTheColumn() throws {
+        final class Note: NSView {
+            let height: CGFloat
+            init(width: CGFloat, height: CGFloat) {
+                self.height = height
+                super.init(frame: NSRect(x: 0, y: 0, width: width, height: height))
+            }
+            required init?(coder: NSCoder) { nil }
+            override var fittingSize: NSSize { NSSize(width: frame.width, height: height) }
+        }
+        let old = "one\ntwo\nthree\n"
+        let view = FileDiffView<Int>()
+        view.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        view.renderAnnotation = { Note(width: CGFloat($0.metadata) * 30, height: 20) }
+        let file = try parseDiffFromFile(
+            oldFile: FileContents(name: "a.txt", contents: old), newFile: FileContents(name: "a.txt", contents: old.replacingOccurrences(of: "two", with: "2")))
+        view.render(fileDiff: file, lineAnnotations: [DiffLineAnnotation(side: .additions, lineNumber: 2, metadata: 1), DiffLineAnnotation(side: .additions, lineNumber: 2, metadata: 2)])
+        view.layoutSubtreeIfNeeded()
+        let single = FileDiffView<Int>()
+        single.frame = view.frame
+        single.renderAnnotation = { Note(width: CGFloat($0.metadata) * 30, height: 20) }
+        single.render(fileDiff: file, lineAnnotations: [DiffLineAnnotation(side: .additions, lineNumber: 2, metadata: 1)])
+        single.layoutSubtreeIfNeeded()
+        let column = try #require(single.grid.subviews.first { $0 is Note }).frame.width
+        func notes(_ v: NSView) -> [NSView] { v.subviews.flatMap { ($0 is Note ? [$0] : []) + notes($0) } }
+        let stacked = notes(view.grid)
+        #expect(stacked.count == 2)
+        #expect(stacked.allSatisfy { $0.frame.width == column }, "each fills the column, as a single annotation does")
+        #expect(Set(stacked.map(\.frame.minY)).count == 2, "one above the other")
+    }
 }

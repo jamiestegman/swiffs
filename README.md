@@ -58,6 +58,11 @@ view.onEditComplete = { event in
 let complete = editor.edit(view)
 ```
 
+Annotation views are measured when they are added. When one's content
+changes size, call `noteHeightOfAnnotationsChanged()` on its file view, or
+`noteHeightOfAnnotationsChanged(inItem:)` on a `CodeView`, as with
+`NSTableView.noteHeightOfRows(withIndexesChanged:)`.
+
 Pass `editStateKey:` to keep a session's document, undo history, selections
 and diff hunks in `EditStateManager.shared` after it ends; a later editor
 with the same key resumes it.
@@ -91,7 +96,13 @@ Highlighting matches Shiki token for token, and is organized for native use:
 - Short lines are matched with Oniguruma's `OnigRegSet`, like
   vscode-oniguruma.
 - Diffs highlight on a background worker pool (with an LRU cache keyed by
-  `cacheKey`); large diffs tokenize their two sides concurrently.
+  `cacheKey`); large diffs tokenize their two sides concurrently. Requests for
+  a result already being computed wait for it, and a view takes a cached
+  result before highlighting anything itself.
+- `CodeView` highlights items on the worker pool before they scroll into view
+  (`CodeViewOptions.prefetch`, one viewport height beyond the overscan by
+  default), so a scroll mounts files already highlighted. Give diffs a
+  `cacheKey` (`parsePatchFiles(_:cacheKeyPrefix:)`) for this to apply.
 
 ## Testing
 

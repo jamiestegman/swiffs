@@ -20,8 +20,8 @@ Swiffs is structured like a native library with a UI-free core
 
 ## Requirements
 
-- macOS 14 or later
-- Xcode 16.3 or later (Swift 6.1)
+- macOS 26 or later
+- Xcode 26 or later (Swift 6.2)
 
 ## Upstream
 

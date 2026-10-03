@@ -92,7 +92,14 @@ public final class FileView<Metadata>: DiffsDocumentView {
         for annotation in annotations {
             byLine[annotation.lineNumber, default: []].append(annotation)
         }
+        let key = { (line: Int) in AnnotationKey(side: nil, lineNumber: line) }
+        let previous = Dictionary(uniqueKeysWithValues: annotationsByLine.map { (key($0.key), $0.value) })
         annotationsByLine = byLine
+        if let changed = changedAnnotationKeys(previous, Dictionary(uniqueKeysWithValues: byLine.map { (key($0.key), $0.value) })) {
+            grid.reloadAnnotationViews(covering: changed)
+        } else {
+            grid.reloadAnnotationViews()
+        }
     }
 
     public func setSelectedLines(_ range: SelectedLineRange?) {

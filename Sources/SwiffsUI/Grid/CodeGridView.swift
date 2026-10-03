@@ -70,6 +70,8 @@ final class CodeGridView: NSView {
     private var maxTextWidth: [Int: CGFloat] = [:]
     private var annotationViews: [AnnotationViewKey: NSView] = [:]
     private var annotationHeights: [AnnotationViewKey: CGFloat] = [:]
+    /// Where each view sits in the current rows, refreshed on every layout.
+    private var annotationPlacements: [AnnotationViewKey: (row: Int, column: Int)] = [:]
 
     /// Shared horizontal offset of the code columns (split columns scroll
     /// together, like `ScrollSyncManager`).
@@ -109,9 +111,13 @@ final class CodeGridView: NSView {
         var dimmed: Bool
     }
 
-    private struct AnnotationViewKey: Hashable {
-        var row: Int
-        var column: Int
+    /// Identifies an annotation view by what it shows, so it survives rows
+    /// moving around it. Merge conflict actions are identified by their
+    /// conflict, which changes as conflicts resolve, so they are rebuilt with
+    /// the rows.
+    private enum AnnotationViewKey: Hashable {
+        case annotation(keys: [AnnotationKey], cell: Int)
+        case mergeActions(conflictIndex: Int, cell: Int)
     }
 
     /// Maps selection points to row indexes (`getLineIndex`).
@@ -148,9 +154,12 @@ final class CodeGridView: NSView {
         }
         if rowsChanged {
             textSelection = nil
-            for view in annotationViews.values { view.removeFromSuperview() }
-            annotationViews.removeAll()
-            annotationHeights.removeAll()
+            let shown = sameShape ? annotationKeys(in: model) : []
+            for (key, view) in annotationViews where !shown.contains(key) {
+                view.removeFromSuperview()
+                annotationViews[key] = nil
+                annotationHeights[key] = nil
+            }
         }
         layoutWidth = -1
         relayout(width: bounds.width)
@@ -209,6 +218,7 @@ final class CodeGridView: NSView {
         }
         layoutWidth = width
         columns = computeColumns(width: width)
+        annotationPlacements.removeAll()
         let lineHeight = style.lineHeight
         var tops: [CGFloat] = []
         var heights: [CGFloat] = []
@@ -334,7 +344,8 @@ final class CodeGridView: NSView {
     // MARK: - Annotations
 
     private func measureAnnotation(_ annotation: AnnotationCell, row: Int, column: Int, geometry: ColumnGeometry) -> CGFloat {
-        let key = AnnotationViewKey(row: row, column: column)
+        let key = AnnotationViewKey.annotation(keys: annotation.keys, cell: geometry.cellIndex)
+        annotationPlacements[key] = (row, column)
         var view = annotationViews[key]
         if view == nil, !annotation.keys.isEmpty, let created = delegate?.grid(self, annotationViewFor: annotation, column: column) {
             annotationViews[key] = created
@@ -361,7 +372,8 @@ final class CodeGridView: NSView {
     private func measureMergeActions(conflictIndex: Int, row: Int, column: Int, geometry: ColumnGeometry) -> CGFloat {
         let minimum = GridMetrics.mergeConflictActionsHeight
         guard model.mergeConflictActionsType == .custom else { return minimum }
-        let key = AnnotationViewKey(row: row, column: column)
+        let key = AnnotationViewKey.mergeActions(conflictIndex: conflictIndex, cell: geometry.cellIndex)
+        annotationPlacements[key] = (row, column)
         var view = annotationViews[key]
         if view == nil, let created = delegate?.grid(self, mergeConflictActionViewFor: conflictIndex) {
             annotationViews[key] = created
@@ -383,17 +395,17 @@ final class CodeGridView: NSView {
 
     private func layoutAnnotationViews() {
         for (key, view) in annotationViews {
-            guard key.row < rowTops.count, key.column < columns.count else {
+            guard let placement = annotationPlacements[key], placement.row < rowTops.count, placement.column < columns.count else {
                 view.isHidden = true
                 continue
             }
-            let column = columns[key.column]
+            let column = columns[placement.column]
             view.isHidden = false
             view.frame = CGRect(
                 x: column.contentMinX,
-                y: rowTops[key.row],
+                y: rowTops[placement.row],
                 width: column.contentWidth,
-                height: rowHeights[key.row]
+                height: rowHeights[placement.row]
             )
         }
         editing.client?.editorLayoutOverlayViews()
@@ -405,6 +417,28 @@ final class CodeGridView: NSView {
         for view in annotationViews.values { view.removeFromSuperview() }
         annotationViews.removeAll()
         annotationHeights.removeAll()
+    }
+
+    /// Drops the views showing any of `keys`, so the next layout asks the
+    /// delegate for them again.
+    func reloadAnnotationViews(covering keys: Set<AnnotationKey>) {
+        for (key, view) in annotationViews {
+            guard case .annotation(let shown, _) = key, !keys.isDisjoint(with: shown) else { continue }
+            view.removeFromSuperview()
+            annotationViews[key] = nil
+            annotationHeights[key] = nil
+        }
+    }
+
+    /// The annotation views a model shows.
+    private func annotationKeys(in model: GridModel) -> Set<AnnotationViewKey> {
+        var keys: Set<AnnotationViewKey> = []
+        for row in model.rows {
+            for (index, cell) in row.cells.enumerated() {
+                if case .annotation(let annotation)? = cell { keys.insert(.annotation(keys: annotation.keys, cell: index)) }
+            }
+        }
+        return keys
     }
 
     /// Re-measures annotation views (call after their content changes).

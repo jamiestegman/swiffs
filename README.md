@@ -63,6 +63,13 @@ changes size, call `noteHeightOfAnnotationsChanged()` on its file view, or
 `noteHeightOfAnnotationsChanged(inItem:)` on a `CodeView`, as with
 `NSTableView.noteHeightOfRows(withIndexesChanged:)`.
 
+An annotation keeps its view while it is unchanged, so state in the view (a
+comment being typed) survives other annotations and rows changing. Swiffs
+compares annotations when their metadata is `Equatable` and otherwise
+rebuilds every annotation view when annotations are set. A view that shows
+live state should observe it rather than capture it, since an unchanged
+annotation is not asked for its view again.
+
 Pass `editStateKey:` to keep a session's document, undo history, selections
 and diff hunks in `EditStateManager.shared` after it ends; a later editor
 with the same key resumes it.

@@ -4,9 +4,10 @@
 
 import Foundation
 import SwiffsCore
+import Synchronization
 
 /// A small LRU map (the `lru_map` dependency upstream).
-final class LRUCache<Key: Hashable, Value> {
+struct LRUCache<Key: Hashable, Value> {
     private var values: [Key: Value] = [:]
     private var order: [Key] = []
     let capacity: Int
@@ -15,7 +16,7 @@ final class LRUCache<Key: Hashable, Value> {
         self.capacity = capacity
     }
 
-    func get(_ key: Key) -> Value? {
+    mutating func get(_ key: Key) -> Value? {
         guard let value = values[key] else { return nil }
         if let index = order.firstIndex(of: key) {
             order.remove(at: index)
@@ -24,7 +25,7 @@ final class LRUCache<Key: Hashable, Value> {
         return value
     }
 
-    func set(_ key: Key, _ value: Value) {
+    mutating func set(_ key: Key, _ value: Value) {
         if values[key] != nil, let index = order.firstIndex(of: key) {
             order.remove(at: index)
         }
@@ -35,7 +36,7 @@ final class LRUCache<Key: Hashable, Value> {
         }
     }
 
-    func removeAll() {
+    mutating func removeAll() {
         values.removeAll()
         order.removeAll()
     }
@@ -50,13 +51,15 @@ public struct HighlightWorkerStats: Hashable, Sendable {
 
 /// Highlights on background threads. Each worker owns one
 /// `DiffsHighlighter` confined to its serial queue.
-public final class HighlightWorkerPool: @unchecked Sendable {
+public final class HighlightWorkerPool: Sendable {
     public static let shared = HighlightWorkerPool()
 
+    public typealias Completion<Value> = @Sendable (Result<Value, Error>) -> Void
+
+    /// Unchecked because its highlighters are only used on its serial queue.
     private final class Worker: @unchecked Sendable {
         let queue: DispatchQueue
         let highlighter: DiffsHighlighter
-        var pending = 0
 
         init(index: Int, registry: HighlighterRegistry) {
             queue = DispatchQueue(label: "swiffs.highlight.worker.\(index)", qos: .userInitiated)
@@ -85,48 +88,47 @@ public final class HighlightWorkerPool: @unchecked Sendable {
         case start
     }
 
+    private struct State {
+        /// Tasks queued or running on each worker, by worker index.
+        var pending: [Int]
+        var diffCache: LRUCache<DiffCacheKey, ThemedDiffResult>
+        var fileCache: LRUCache<FileCacheKey, ThemedFileResult>
+        /// Callers waiting on a keyed result that a worker is computing, so a
+        /// second request for it waits instead of computing it again.
+        var diffWaiters: [DiffCacheKey: [Completion<ThemedDiffResult>]] = [:]
+        var fileWaiters: [FileCacheKey: [Completion<ThemedFileResult>]] = [:]
+    }
+
     private let workers: [Worker]
-    private let lock = NSLock()
-    private let diffCache: LRUCache<DiffCacheKey, ThemedDiffResult>
-    private let fileCache: LRUCache<FileCacheKey, ThemedFileResult>
-    /// Callers waiting on a keyed result that a worker is computing, so a
-    /// second request for it waits instead of computing it again.
-    private var diffWaiters: [DiffCacheKey: [@Sendable (Result<ThemedDiffResult, Error>) -> Void]] = [:]
-    private var fileWaiters: [FileCacheKey: [@Sendable (Result<ThemedFileResult, Error>) -> Void]] = [:]
+    private let state: Mutex<State>
 
     public init(workerCount: Int = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount - 1)), cacheCapacity: Int = 100, registry: HighlighterRegistry = .shared) {
         workers = (0 ..< max(1, workerCount)).map { Worker(index: $0, registry: registry) }
-        diffCache = LRUCache(capacity: cacheCapacity)
-        fileCache = LRUCache(capacity: cacheCapacity)
+        state = Mutex(State(pending: Array(repeating: 0, count: workers.count), diffCache: LRUCache(capacity: cacheCapacity), fileCache: LRUCache(capacity: cacheCapacity)))
     }
 
-    private func nextWorker() -> Worker {
-        lock.withLock {
-            let worker = workers.min { $0.pending < $1.pending }!
-            worker.pending += 1
-            return worker
+    private func nextWorker() -> Int {
+        state.withLock { state in
+            let index = state.pending.indices.min { state.pending[$0] < state.pending[$1] }!
+            state.pending[index] += 1
+            return index
         }
     }
 
-    private func finish(_ worker: Worker) {
-        lock.withLock { worker.pending -= 1 }
+    private func finish(_ index: Int) {
+        state.withLock { $0.pending[index] -= 1 }
     }
 
     public var stats: HighlightWorkerStats {
-        lock.withLock {
-            HighlightWorkerStats(
-                workers: workers.count,
-                pendingTasks: workers.reduce(0) { $0 + $1.pending },
-                cachedDiffs: 0,
-                cachedFiles: 0
-            )
+        state.withLock { state in
+            HighlightWorkerStats(workers: workers.count, pendingTasks: state.pending.reduce(0, +), cachedDiffs: 0, cachedFiles: 0)
         }
     }
 
     /// Returns a cached result for a keyed diff, if any.
     public func cachedDiffResult(_ diff: FileDiffMetadata, options: RenderDiffOptions) -> ThemedDiffResult? {
         guard let cacheKey = diff.cacheKey else { return nil }
-        return lock.withLock { diffCache.get(DiffCacheKey(cacheKey: cacheKey, options: options)) }
+        return state.withLock { $0.diffCache.get(DiffCacheKey(cacheKey: cacheKey, options: options)) }
     }
 
     /// A result available now: the cached one, or, for content of at most
@@ -138,7 +140,7 @@ public final class HighlightWorkerPool: @unchecked Sendable {
         if let cached = cachedDiffResult(request.diff, options: request.options) { return cached }
         guard request.lineCount <= synchronousLineLimit, let result = try? Self.mainThreadHighlighter.renderDiff(request.diff, options: request.options) else { return nil }
         if let cacheKey = request.diff.cacheKey {
-            lock.withLock { diffCache.set(DiffCacheKey(cacheKey: cacheKey, options: request.options), result) }
+            state.withLock { $0.diffCache.set(DiffCacheKey(cacheKey: cacheKey, options: request.options), result) }
         }
         return result
     }
@@ -150,7 +152,7 @@ public final class HighlightWorkerPool: @unchecked Sendable {
         if let cached = cachedFileResult(request.file, options: request.options) { return cached }
         guard request.lineCount <= synchronousLineLimit, let result = try? Self.mainThreadHighlighter.renderFile(request.file, options: request.options) else { return nil }
         if let cacheKey = request.file.cacheKey {
-            lock.withLock { fileCache.set(FileCacheKey(cacheKey: cacheKey, options: request.options), result) }
+            state.withLock { $0.fileCache.set(FileCacheKey(cacheKey: cacheKey, options: request.options), result) }
         }
         return result
     }
@@ -160,7 +162,7 @@ public final class HighlightWorkerPool: @unchecked Sendable {
 
     public func cachedFileResult(_ file: FileContents, options: RenderFileOptions) -> ThemedFileResult? {
         guard let cacheKey = file.cacheKey else { return nil }
-        return lock.withLock { fileCache.get(FileCacheKey(cacheKey: cacheKey, options: options)) }
+        return state.withLock { $0.fileCache.get(FileCacheKey(cacheKey: cacheKey, options: options)) }
     }
 
     /// Highlights a diff on a worker; `completion` runs on the main queue.
@@ -168,14 +170,14 @@ public final class HighlightWorkerPool: @unchecked Sendable {
         _ diff: FileDiffMetadata,
         options: RenderDiffOptions,
         forcePlainText: Bool = false,
-        completion: @escaping @Sendable (Result<ThemedDiffResult, Error>) -> Void
+        completion: @escaping Completion<ThemedDiffResult>
     ) {
         let key = forcePlainText ? nil : diff.cacheKey.map { DiffCacheKey(cacheKey: $0, options: options) }
         if let key {
-            let request: Request<ThemedDiffResult> = lock.withLock {
-                if let hit = diffCache.get(key) { return .cached(hit) }
-                let running = diffWaiters[key] != nil
-                diffWaiters[key, default: []].append(completion)
+            let request: Request<ThemedDiffResult> = state.withLock { state in
+                if let hit = state.diffCache.get(key) { return .cached(hit) }
+                let running = state.diffWaiters[key] != nil
+                state.diffWaiters[key, default: []].append(completion)
                 return running ? .waiting : .start
             }
             switch request {
@@ -188,7 +190,8 @@ public final class HighlightWorkerPool: @unchecked Sendable {
                 break
             }
         }
-        let worker = nextWorker()
+        let index = nextWorker()
+        let worker = workers[index]
         worker.queue.async { [self] in
             let result = Result {
                 try worker.highlighter.renderDiff(
@@ -197,12 +200,12 @@ public final class HighlightWorkerPool: @unchecked Sendable {
                     plainText: ForceDiffPlainTextOptions(forcePlainText: forcePlainText, expandedHunks: forcePlainText ? .all : nil)
                 )
             }
-            let waiters: [@Sendable (Result<ThemedDiffResult, Error>) -> Void] = lock.withLock {
+            let waiters: [Completion<ThemedDiffResult>] = state.withLock { state in
                 guard let key else { return [completion] }
-                if case .success(let value) = result { diffCache.set(key, value) }
-                return diffWaiters.removeValue(forKey: key) ?? []
+                if case .success(let value) = result { state.diffCache.set(key, value) }
+                return state.diffWaiters.removeValue(forKey: key) ?? []
             }
-            finish(worker)
+            finish(index)
             DispatchQueue.main.async { for waiter in waiters { waiter(result) } }
         }
     }
@@ -212,14 +215,14 @@ public final class HighlightWorkerPool: @unchecked Sendable {
         _ file: FileContents,
         options: RenderFileOptions,
         forcePlainText: Bool = false,
-        completion: @escaping @Sendable (Result<ThemedFileResult, Error>) -> Void
+        completion: @escaping Completion<ThemedFileResult>
     ) {
         let key = forcePlainText ? nil : file.cacheKey.map { FileCacheKey(cacheKey: $0, options: options) }
         if let key {
-            let request: Request<ThemedFileResult> = lock.withLock {
-                if let hit = fileCache.get(key) { return .cached(hit) }
-                let running = fileWaiters[key] != nil
-                fileWaiters[key, default: []].append(completion)
+            let request: Request<ThemedFileResult> = state.withLock { state in
+                if let hit = state.fileCache.get(key) { return .cached(hit) }
+                let running = state.fileWaiters[key] != nil
+                state.fileWaiters[key, default: []].append(completion)
                 return running ? .waiting : .start
             }
             switch request {
@@ -232,15 +235,16 @@ public final class HighlightWorkerPool: @unchecked Sendable {
                 break
             }
         }
-        let worker = nextWorker()
+        let index = nextWorker()
+        let worker = workers[index]
         worker.queue.async { [self] in
             let result = Result { try worker.highlighter.renderFile(file, options: options, forcePlainText: forcePlainText) }
-            let waiters: [@Sendable (Result<ThemedFileResult, Error>) -> Void] = lock.withLock {
+            let waiters: [Completion<ThemedFileResult>] = state.withLock { state in
                 guard let key else { return [completion] }
-                if case .success(let value) = result { fileCache.set(key, value) }
-                return fileWaiters.removeValue(forKey: key) ?? []
+                if case .success(let value) = result { state.fileCache.set(key, value) }
+                return state.fileWaiters.removeValue(forKey: key) ?? []
             }
-            finish(worker)
+            finish(index)
             DispatchQueue.main.async { for waiter in waiters { waiter(result) } }
         }
     }
@@ -259,9 +263,9 @@ public final class HighlightWorkerPool: @unchecked Sendable {
 
     /// Clears cached results (e.g. after registering new themes).
     public func clearCache() {
-        lock.withLock {
-            diffCache.removeAll()
-            fileCache.removeAll()
+        state.withLock { state in
+            state.diffCache.removeAll()
+            state.fileCache.removeAll()
         }
     }
 }

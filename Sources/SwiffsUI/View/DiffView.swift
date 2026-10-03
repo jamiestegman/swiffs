@@ -211,6 +211,11 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
         relayout()
     }
 
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshStyle(force: false)
+    }
+
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         refreshStyle(force: false)
@@ -221,6 +226,7 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
         let key = StyleKey(
             theme: configuration.theme, colorScheme: configuration.colorScheme, systemIsDark: effectiveAppearance.isDark,
             typography: configuration.typography, overrides: configuration.colorOverrides)
+        guard key != styleKey || force || configuration != layoutModel.configuration else { return }
         let style = key != styleKey || force ? Self.makeStyle(key) : layoutModel.style
         styleKey = key
         layoutModel.setConfiguration(configuration, style: style)
@@ -331,20 +337,30 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
         placeAccessories()
     }
 
-    private var hasAccessories: Bool { Accessory.self != EmptyView.self && configuration.showsHeaders }
+    private var hasAccessories: Bool { !Accessory.isEmptyContent && configuration.showsHeaders }
 
+    /// Hosts accessories for the items near the viewport, and drops those of
+    /// items scrolled away; accessories show the client's state, so nothing
+    /// is lost.
     private func placeAccessories() {
         guard hasAccessories else { return }
         let visible = viewport
         let reach = visible.height * configuration.overscan
-        for item in layoutModel.items(in: visible.minY - reach, visible.maxY + reach) where accessoryHosts[item.id] == nil {
-            let id = item.id
-            let host = AccessoryHost(content: accessoryContent(item.item)) { [weak self] _ in self?.accessorySizeChanged(id) }
-            documentView.addSubview(host.view)
-            accessoryHosts[id] = host
+        let near = layoutModel.items(in: visible.minY - reach, visible.maxY + reach)
+        let nearIDs = Set(near.map(\.id))
+        for (id, host) in accessoryHosts where !nearIDs.contains(id) && id != stickyHeader.itemID {
+            host.view.removeFromSuperview()
+            accessoryHosts[id] = nil
+            documentView.accessoryWidths[id] = nil
         }
-        for (id, host) in accessoryHosts {
-            guard let item = layoutModel.item(id) else { continue }
+        for item in near {
+            let id = item.id
+            let host = accessoryHosts[id] ?? {
+                let host = AccessoryHost(content: accessoryContent(item.item)) { [weak self] _ in self?.accessorySizeChanged(id) }
+                documentView.addSubview(host.view)
+                accessoryHosts[id] = host
+                return host
+            }()
             documentView.accessoryWidths[id] = host.size.width
             guard id != stickyHeader.itemID else { continue }
             if host.view.superview !== documentView { documentView.addSubview(host.view) }
@@ -357,11 +373,9 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
     }
 
     private func accessorySizeChanged(_ id: String) {
-        guard let item = layoutModel.item(id) else { return }
         placeAccessories()
         documentView.redrawItems([id])
         if stickyHeader.itemID == id { updateStickyHeader() }
-        _ = item
     }
 
     // MARK: Viewport

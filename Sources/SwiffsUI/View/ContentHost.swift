@@ -112,3 +112,20 @@ final class AccessoryHost<Content: View> {
         }
     }
 }
+
+/// Content known to draw nothing, so it needs no host.
+protocol EmptyContent {
+    static var isEmptyContent: Bool { get }
+}
+
+extension View {
+    static var isEmptyContent: Bool { (Self.self as? EmptyContent.Type)?.isEmptyContent ?? false }
+}
+
+extension EmptyView: EmptyContent {
+    static var isEmptyContent: Bool { true }
+}
+
+extension EnvironmentBound: EmptyContent {
+    static var isEmptyContent: Bool { Content.isEmptyContent }
+}

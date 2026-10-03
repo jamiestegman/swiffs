@@ -388,3 +388,62 @@ struct GrowingFileTests {
         #expect(model.generation != generation)
     }
 }
+
+struct AccessoryTests {
+    struct Badge: View {
+        let name: String
+        var body: some View { Text(name).frame(width: 60, height: 20) }
+    }
+
+    private func harness(_ count: Int) throws -> (NSWindow, DiffView<String, EmptyView, Badge>) {
+        let view = DiffView(configuration: Fixtures.configuration(), annotation: { (_: String) in EmptyView() }) { item in Badge(name: item.id) }
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        view.update(items: try (0 ..< count).map { .diff(try Fixtures.diff(name: "f\($0).swift")) }, configuration: view.configuration)
+        view.layoutSubtreeIfNeeded()
+        return (window, view)
+    }
+
+    private func badges(in view: NSView) -> [NSView] {
+        view.subviews.filter { $0 is NSHostingView<IdealSizeContent<Badge>> }
+    }
+
+    @Test func accessoriesSitAtTheEndOfTheirHeader() throws {
+        let (window, view) = try harness(3)
+        defer { window.close() }
+        let first = try #require(view.layoutModel.item("f0.swift"))
+        let badge = try #require(badges(in: view.documentView).min { $0.frame.minY < $1.frame.minY })
+        #expect(badge.frame.size == CGSize(width: 60, height: 20))
+        #expect(badge.frame.maxX == view.scrollView.contentSize.width - HeaderPainter.paddingInline)
+        #expect(badge.frame.midY == first.top + Metrics.headerHeight / 2)
+        #expect(view.documentView.accessoryWidths["f0.swift"] == 60)
+    }
+
+    @Test func theStuckItemsAccessoryMovesIntoTheStickyHeader() throws {
+        let (window, view) = try harness(10)
+        defer { window.close() }
+        view.scroll(to: .line(20, in: "f2.swift", animation: .none))
+        #expect(view.stickyHeader.itemID == "f2.swift")
+        #expect(badges(in: view.stickyHeader).count == 1)
+        view.scroll(to: .item("f0.swift", animation: .none))
+        #expect(view.stickyHeader.itemID == nil)
+        #expect(badges(in: view.stickyHeader).isEmpty)
+    }
+
+    @Test func accessoriesOfItemsFarAwayAreReleased() throws {
+        let (window, view) = try harness(60)
+        defer { window.close() }
+        let initial = badges(in: view.documentView).count
+        #expect(initial > 0 && initial < 15)
+        view.scroll(to: .item("f50.swift", animation: .none))
+        #expect(badges(in: view.documentView).count < 15)
+        #expect(view.documentView.accessoryWidths["f0.swift"] == nil)
+    }
+
+    @Test func aListWithoutAccessoriesHostsNone() throws {
+        let window = HostingWindow(DiffList([.diff(try Fixtures.diff())], configuration: Fixtures.configuration()))
+        let view = try #require(window.find(DiffList<NoAnnotation, EmptyView, EmptyView>.NSViewType.self))
+        #expect(view.documentView.subviews.isEmpty)
+    }
+}

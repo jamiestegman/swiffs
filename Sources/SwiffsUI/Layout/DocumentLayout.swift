@@ -58,7 +58,7 @@ final class DocumentLayout {
         let styleChanged = style !== self.style
         self.style = style
         for item in items {
-            item.configurationChanged(from: old, to: configuration)
+            if configuration != old { item.configurationChanged(from: old, to: configuration) }
             if styleChanged { item.dropLineLayouts() }
         }
     }

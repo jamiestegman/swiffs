@@ -1,6 +1,7 @@
 // Port of vscode-textmate `rule.ts` and the regex helpers from `utils.ts`.
 
 import Foundation
+import Synchronization
 
 let endRuleId = -1
 let whileRuleId = -2
@@ -320,7 +321,12 @@ final class CompiledRule {
 }
 
 public enum HighlightDiagnostics {
-    public nonisolated(unsafe) static var handler: (@Sendable (String) -> Void)?
+    private static let storage = Mutex<(@Sendable (String) -> Void)?>(nil)
+
+    public static var handler: (@Sendable (String) -> Void)? {
+        get { storage.withLock { $0 } }
+        set { storage.withLock { $0 = newValue } }
+    }
 
     static func report(_ message: @autoclosure () -> String) {
         handler?(message())

@@ -1,6 +1,7 @@
 // Port of `packages/diffs/src/utils/parsePatchFiles.ts`.
 
 import Foundation
+import Synchronization
 
 public struct PatchParseError: Error, Hashable, Sendable, CustomStringConvertible {
     public var message: String
@@ -11,7 +12,12 @@ public struct PatchParseError: Error, Hashable, Sendable, CustomStringConvertibl
 /// Receives recoverable parser diagnostics (the upstream implementation logs
 /// these with `console.error`). Defaults to discarding them.
 public enum SwiffsDiagnostics {
-    public nonisolated(unsafe) static var handler: (@Sendable (String) -> Void)? = nil
+    private static let storage = Mutex<(@Sendable (String) -> Void)?>(nil)
+
+    public static var handler: (@Sendable (String) -> Void)? {
+        get { storage.withLock { $0 } }
+        set { storage.withLock { $0 = newValue } }
+    }
 
     static func error(_ message: @autoclosure () -> String) {
         handler?(message())

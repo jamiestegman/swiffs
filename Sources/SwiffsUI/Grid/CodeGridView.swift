@@ -399,6 +399,14 @@ final class CodeGridView: NSView {
         editing.client?.editorLayoutOverlayViews()
     }
 
+    /// Drops annotation views so the delegate builds and measures them again on the next layout (call when the
+    /// annotations they show change, since a cell's key is only its line).
+    func reloadAnnotationViews() {
+        for view in annotationViews.values { view.removeFromSuperview() }
+        annotationViews.removeAll()
+        annotationHeights.removeAll()
+    }
+
     /// Re-measures annotation views (call after their content changes).
     func invalidateAnnotationSizes() {
         annotationHeights.removeAll()

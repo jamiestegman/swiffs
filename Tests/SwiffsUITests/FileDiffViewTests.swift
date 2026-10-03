@@ -56,4 +56,34 @@ struct FileDiffViewTests {
         #expect(up.accessibilityPerformPress())
         #expect(view.grid.model.rows.count > before)
     }
+
+    @Test func newAnnotationsOnTheSameLineReplaceTheirViews() throws {
+        final class Note: NSView {
+            let height: CGFloat
+            init(_ text: String, height: CGFloat) {
+                self.height = height
+                super.init(frame: .zero)
+                identifier = NSUserInterfaceItemIdentifier(text)
+            }
+            required init?(coder: NSCoder) { nil }
+            override var fittingSize: NSSize { NSSize(width: frame.width, height: height) }
+        }
+        let old = "one\ntwo\nthree\n"
+        let view = FileDiffView<String>()
+        view.frame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        view.renderAnnotation = { Note($0.metadata, height: $0.metadata == "short" ? 20 : 60) }
+        let file = try parseDiffFromFile(
+            oldFile: FileContents(name: "a.txt", contents: old), newFile: FileContents(name: "a.txt", contents: old.replacingOccurrences(of: "two", with: "2")))
+        func notes() -> [String] { view.grid.subviews.compactMap { ($0 as? Note)?.identifier?.rawValue } }
+
+        view.render(fileDiff: file, lineAnnotations: [DiffLineAnnotation(side: .additions, lineNumber: 2, metadata: "short")])
+        view.layoutSubtreeIfNeeded()
+        #expect(notes() == ["short"])
+        let before = view.grid.frame.height
+
+        view.render(fileDiff: file, lineAnnotations: [DiffLineAnnotation(side: .additions, lineNumber: 2, metadata: "tall")])
+        view.layoutSubtreeIfNeeded()
+        #expect(notes() == ["tall"], "An annotation's view is rebuilt when its annotations change, not only when its line does")
+        #expect(view.grid.frame.height == before + 40)
+    }
 }

@@ -132,6 +132,7 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
             byKey[AnnotationKey(side: annotation.side, lineNumber: annotation.lineNumber), default: []].append(annotation)
         }
         annotationsByKey = byKey
+        grid.reloadAnnotationViews()
     }
 
     // MARK: Selection

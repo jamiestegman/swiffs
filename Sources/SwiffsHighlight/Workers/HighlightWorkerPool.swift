@@ -129,6 +129,20 @@ public final class HighlightWorkerPool: @unchecked Sendable {
         return lock.withLock { diffCache.get(DiffCacheKey(cacheKey: cacheKey, options: options)) }
     }
 
+    /// Keeps a keyed diff's result computed elsewhere (such as on the main
+    /// thread), so later requests reuse it.
+    public func storeDiffResult(_ result: ThemedDiffResult, for diff: FileDiffMetadata, options: RenderDiffOptions) {
+        guard let cacheKey = diff.cacheKey else { return }
+        lock.withLock { diffCache.set(DiffCacheKey(cacheKey: cacheKey, options: options), result) }
+    }
+
+    /// Keeps a keyed file's result computed elsewhere, so later requests
+    /// reuse it.
+    public func storeFileResult(_ result: ThemedFileResult, for file: FileContents, options: RenderFileOptions) {
+        guard let cacheKey = file.cacheKey else { return }
+        lock.withLock { fileCache.set(FileCacheKey(cacheKey: cacheKey, options: options), result) }
+    }
+
     public func cachedFileResult(_ file: FileContents, options: RenderFileOptions) -> ThemedFileResult? {
         guard let cacheKey = file.cacheKey else { return nil }
         return lock.withLock { fileCache.get(FileCacheKey(cacheKey: cacheKey, options: options)) }

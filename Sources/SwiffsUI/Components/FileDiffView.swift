@@ -456,10 +456,15 @@ public final class FileDiffView<Metadata>: DiffsDocumentView {
         let key = HighlightKey(diff: fileDiff, options: effectiveOptions.renderDiffOptions, forcePlainText: isMassive)
         if !force, key == highlightKey || key == pendingHighlightKey { return }
         pendingHighlightKey = key
+        if !key.forcePlainText, let cached = HighlightWorkerPool.shared.cachedDiffResult(fileDiff, options: key.options) {
+            applyHighlight(cached, key: key)
+            return
+        }
         let lineCount = max(fileDiff.additionLines.count, fileDiff.deletionLines.count)
         if lineCount <= synchronousHighlightLineLimit, !key.forcePlainText {
             let highlighter = MainThreadHighlighter.shared
             if let result = try? highlighter.renderDiff(fileDiff, options: key.options) {
+                HighlightWorkerPool.shared.storeDiffResult(result, for: fileDiff, options: key.options)
                 applyHighlight(result, key: key)
                 return
             }

@@ -205,9 +205,14 @@ public final class FileView<Metadata>: DiffsDocumentView {
         let key = HighlightKey(file: file, options: renderOptions, forcePlainText: lines.count > options.tokenizeMaxLength)
         if !force, key == highlightKey || key == pendingHighlightKey { return }
         pendingHighlightKey = key
+        if !key.forcePlainText, let cached = HighlightWorkerPool.shared.cachedFileResult(file, options: renderOptions) {
+            applyHighlight(cached, key: key)
+            return
+        }
         if lines.count <= synchronousHighlightLineLimit, !key.forcePlainText,
            let result = try? MainThreadHighlighter.shared.renderFile(file, options: renderOptions)
         {
+            HighlightWorkerPool.shared.storeFileResult(result, for: file, options: renderOptions)
             applyHighlight(result, key: key)
             return
         }

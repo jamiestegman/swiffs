@@ -8,6 +8,7 @@
 
 import COniguruma
 import Foundation
+import Synchronization
 
 /// A compiled pattern shared by scanners on any thread.
 final class CompiledOnigRegex: @unchecked Sendable {
@@ -26,7 +27,7 @@ final class CompiledOnigRegex: @unchecked Sendable {
     }
 }
 
-final class OnigRegexCache: @unchecked Sendable {
+final class OnigRegexCache: Sendable {
     static let shared = OnigRegexCache(capacity: 8192)
 
     private struct Entry {
@@ -34,53 +35,51 @@ final class OnigRegexCache: @unchecked Sendable {
         var lastUse: UInt64
     }
 
-    private let lock = NSLock()
-    private var entries: [String: Entry] = [:]
-    private var clock: UInt64 = 0
+    private struct State {
+        var entries: [String: Entry] = [:]
+        var clock: UInt64 = 0
+
+        mutating func use(_ pattern: String) -> CompiledOnigRegex? {
+            guard let entry = entries[pattern] else { return nil }
+            clock &+= 1
+            entries[pattern]?.lastUse = clock
+            return entry.regex
+        }
+
+        /// Drops the older half, so eviction cost amortizes across insertions.
+        mutating func evictLeastRecentlyUsed() {
+            let cutoff = entries.values.map(\.lastUse).sorted()[entries.count / 2]
+            entries = entries.filter { $0.value.lastUse >= cutoff }
+        }
+    }
+
+    private let state = Mutex(State())
     let capacity: Int
 
     init(capacity: Int) {
         self.capacity = capacity
     }
 
-    var count: Int { lock.withLock { entries.count } }
+    var count: Int { state.withLock { $0.entries.count } }
 
     /// The compiled regex for a pattern, compiling it on first use. Evicted
     /// entries stay alive while scanners reference them.
     func regex(for pattern: String) throws -> CompiledOnigRegex {
-        if let hit = lookup(pattern) { return hit }
+        if let hit = state.withLock({ $0.use(pattern) }) { return hit }
         // Compile outside the lock; if another thread won the race, use its
         // result.
         let compiled = try Self.compile(pattern)
-        return lock.withLock {
-            clock &+= 1
-            if let existing = entries[pattern] {
-                entries[pattern]?.lastUse = clock
-                return existing.regex
-            }
-            entries[pattern] = Entry(regex: compiled, lastUse: clock)
-            if entries.count > capacity { evictLeastRecentlyUsed() }
+        return state.withLock { state in
+            if let existing = state.use(pattern) { return existing }
+            state.clock &+= 1
+            state.entries[pattern] = Entry(regex: compiled, lastUse: state.clock)
+            if state.entries.count > capacity { state.evictLeastRecentlyUsed() }
             return compiled
         }
     }
 
     func removeAll() {
-        lock.withLock { entries.removeAll() }
-    }
-
-    private func lookup(_ pattern: String) -> CompiledOnigRegex? {
-        lock.withLock {
-            guard let entry = entries[pattern] else { return nil }
-            clock &+= 1
-            entries[pattern]?.lastUse = clock
-            return entry.regex
-        }
-    }
-
-    /// Drops the older half, so eviction cost amortizes across insertions.
-    private func evictLeastRecentlyUsed() {
-        let cutoff = entries.values.map(\.lastUse).sorted()[entries.count / 2]
-        entries = entries.filter { $0.value.lastUse >= cutoff }
+        state.withLock { $0.entries.removeAll() }
     }
 
     private static func compile(_ pattern: String) throws -> CompiledOnigRegex {

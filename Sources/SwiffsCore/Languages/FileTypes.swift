@@ -1,20 +1,20 @@
 // Port of `packages/diffs/src/utils/getFiletypeFromFileName.ts`.
 
 import Foundation
+import Synchronization
 
 /// Maps file names to syntax highlighting languages.
 public enum FileTypes {
-    private final class CustomExtensions: @unchecked Sendable {
-        let lock = NSLock()
+    private struct CustomExtensions {
         var map: [String: SupportedLanguage] = [:]
         var version = 0
     }
 
-    private static let custom = CustomExtensions()
+    private static let custom = Mutex(CustomExtensions())
 
     /// Returns the language for a file name (`text` when unknown).
     public static func getFiletypeFromFileName(_ fileName: String) -> SupportedLanguage {
-        let customMap = custom.lock.withLock { custom.map }
+        let customMap = custom.withLock { $0.map }
         if let language = customMap[fileName] {
             return language
         }
@@ -64,7 +64,7 @@ public enum FileTypes {
     /// Maps a file name or extension (without the dot) to a language.
     @discardableResult
     public static func setCustomExtension(_ key: String, _ language: SupportedLanguage) -> Bool {
-        custom.lock.withLock {
+        custom.withLock { custom in
             if custom.map[key] == language { return false }
             custom.map[key] = language
             custom.version += 1
@@ -76,7 +76,7 @@ public enum FileTypes {
     /// one.
     @discardableResult
     public static func replaceCustomExtensions(version: Int, _ map: [String: SupportedLanguage]) -> Bool {
-        custom.lock.withLock {
+        custom.withLock { custom in
             if version <= custom.version { return false }
             custom.map = map
             custom.version = version
@@ -85,11 +85,11 @@ public enum FileTypes {
     }
 
     public static var customExtensionsVersion: Int {
-        custom.lock.withLock { custom.version }
+        custom.withLock { $0.version }
     }
 
     public static var customExtensionsMap: [String: SupportedLanguage] {
-        custom.lock.withLock { custom.map }
+        custom.withLock { $0.map }
     }
 }
 

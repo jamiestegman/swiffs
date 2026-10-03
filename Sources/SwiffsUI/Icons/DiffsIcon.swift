@@ -2,6 +2,7 @@
 
 import CoreGraphics
 import Foundation
+import Synchronization
 
 struct DiffsIconPath {
     var d: String
@@ -53,12 +54,7 @@ public enum DiffsIcon: String, CaseIterable, Sendable {
     case symbolMovedFill = "diffs-icon-symbol-moved-fill"
     case symbolRef = "diffs-icon-symbol-ref"
 
-    private final class Cache: @unchecked Sendable {
-        let lock = NSLock()
-        var paths: [DiffsIcon: [(CGPath, Bool, CGFloat)]] = [:]
-    }
-
-    private static let cache = Cache()
+    private static let cache = Mutex<[DiffsIcon: [(CGPath, Bool, CGFloat)]]>([:])
 
     /// The icon's view box.
     public var viewBox: CGRect {
@@ -68,12 +64,12 @@ public enum DiffsIcon: String, CaseIterable, Sendable {
     /// Parsed paths in view box coordinates (y down), with fill rule and
     /// opacity.
     func paths() -> [(CGPath, Bool, CGFloat)] {
-        Self.cache.lock.withLock {
-            if let cached = Self.cache.paths[self] { return cached }
+        Self.cache.withLock { cache in
+            if let cached = cache[self] { return cached }
             let parsed = (Self.definitions[rawValue]?.paths ?? []).map { path in
                 (SVGPathParser.parse(path.d), path.evenOdd, path.opacity)
             }
-            Self.cache.paths[self] = parsed
+            cache[self] = parsed
             return parsed
         }
     }

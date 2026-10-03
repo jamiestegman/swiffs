@@ -319,6 +319,16 @@ public final class CodeView<Metadata>: NSView {
 
     // MARK: - Selection
 
+    /// Measures an item's annotation views again after their content changes
+    /// size, so the item's height follows them.
+    public func noteHeightOfAnnotationsChanged(inItem id: String) {
+        guard let view = mountedView(id) else { return }
+        isUpdating = true
+        view.noteHeightOfAnnotationsChanged()
+        isUpdating = false
+        refreshMeasuredHeights()
+    }
+
     public func setSelectedLines(_ selection: CodeViewLineSelection?) {
         let previousID = self.selection?.id
         self.selection = selection

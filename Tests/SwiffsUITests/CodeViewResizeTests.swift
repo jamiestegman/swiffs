@@ -55,4 +55,30 @@ struct CodeViewResizeTests {
             draw()
         }
     }
+
+    @Test func anAnnotationThatGrowsIsMeasuredAgainWhenItsOwnerSaysSo() throws {
+        final class Growing: NSView {
+            var height: CGFloat = 30
+            override var fittingSize: NSSize { NSSize(width: frame.width, height: height) }
+        }
+        let note = Growing()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        let code = CodeView<String>(options: CodeViewOptions())
+        code.frame = window.contentView!.bounds
+        window.contentView?.addSubview(code)
+        code.renderDiffAnnotation = { _, _ in note }
+        let old = "one\ntwo\nthree\n"
+        let file = try parseDiffFromFile(oldFile: FileContents(name: "a.txt", contents: old), newFile: FileContents(name: "a.txt", contents: old.replacingOccurrences(of: "two", with: "2")))
+        code.setItems([.diff(id: "a.txt", file, annotations: [DiffLineAnnotation(side: .additions, lineNumber: 2, metadata: "note")])])
+        window.contentView?.layoutSubtreeIfNeeded()
+        let view = try #require(code.renderedView(for: "a.txt") as? FileDiffView<String>)
+        let before = view.frame.height
+        #expect(note.frame.height == 30)
+
+        note.height = 90
+        code.noteHeightOfAnnotationsChanged(inItem: "a.txt")
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(note.frame.height == 90, "the annotation gets its new height")
+        #expect(view.frame.height == before + 60, "and the file grows to hold it")
+    }
 }

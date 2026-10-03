@@ -216,6 +216,13 @@ public class DiffsDocumentView: NSView, CodeGridDelegate, GridLineProvider {
         context.fill(dirtyRect.intersection(bounds))
     }
 
+    /// Measures annotation views again after their content changes size,
+    /// as `NSTableView.noteHeightOfRows(withIndexesChanged:)` does for rows.
+    public func noteHeightOfAnnotationsChanged() {
+        grid.invalidateAnnotationSizes()
+        gridContentChanged()
+    }
+
     func gridContentChanged() {
         invalidateIntrinsicContentSize()
         needsLayout = true

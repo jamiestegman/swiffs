@@ -355,3 +355,36 @@ struct IsolationRuleTests {
         #expect(violations.isEmpty, "\(violations)")
     }
 }
+
+struct GrowingFileTests {
+    @Test func appendedTextKeepsEarlierLinesAndHighlightsOnlyTheTail() async throws {
+        let start = FileContents(name: "live.swift", contents: "let a = 1\nlet b = ")
+        let harness = Harness([.file(start)])
+        let model = try #require(harness.item("live.swift"))
+        let generation = model.generation
+        let firstLine = model.line(side: .additions, lineIndex: 0, slots: 2)
+        #expect(firstLine.tokens.count > 1, "the first update highlights at once")
+
+        let grown = FileContents(name: "live.swift", contents: "let a = 1\nlet b = 2\nlet c = \"three\"\n")
+        harness.view.update(items: [.file(grown)], configuration: harness.view.configuration)
+        harness.view.layoutSubtreeIfNeeded()
+        #expect(harness.item("live.swift") === model)
+        #expect(model.generation == generation, "growing is not a new file")
+        #expect(model.line(side: .additions, lineIndex: 0, slots: 2) == firstLine, "the first line keeps its highlighting")
+        #expect(model.body?.rows.count == 4)
+
+        let whole = try DiffsHighlighter().renderFile(grown, options: harness.view.configuration.renderFileOptions).lines
+        #expect(await eventually { model.line(side: .additions, lineIndex: 2, slots: 2).tokens.count > 1 })
+        let streamed = model.line(side: .additions, lineIndex: 2, slots: 2)
+        #expect(streamed.text == whole[2]?.text)
+        #expect(streamed.tokens.last?.styles == whole[2]?.tokens.last?.styles)
+    }
+
+    @Test func replacedContentIsNotTreatedAsGrowth() throws {
+        let harness = Harness([.file(FileContents(name: "f.swift", contents: "let a = 1\n"))])
+        let model = try #require(harness.item("f.swift"))
+        let generation = model.generation
+        harness.view.update(items: [.file(FileContents(name: "f.swift", contents: "let b = 2\n"))], configuration: harness.view.configuration)
+        #expect(model.generation != generation)
+    }
+}

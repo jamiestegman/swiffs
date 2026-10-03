@@ -37,6 +37,7 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
     private var annotationHosts: [AnyHashable: AnnotationRecord] = [:]
     private var accessoryHosts: [String: AccessoryHost<Accessory>] = [:]
     private var highlightTasks: [String: (generation: Int, task: Task<Void, Never>)] = [:]
+    private var growthStreams: [String: GrowthStream] = [:]
     private var styleKey: StyleKey
     private var isLayingOut = false
     private var needsRelayout = false
@@ -47,6 +48,14 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
     private var needsFullRedraw = true
     private(set) var scroll = ScrollAnimator()
     private var displayLink: CADisplayLink?
+
+    /// Highlights a growing file's new text in order, one append at a time.
+    private struct GrowthStream {
+        let stream: HighlightStream
+        /// Text appended since the stream last ran.
+        var pending: String
+        var task: Task<Void, Never>?
+    }
 
     private struct AnnotationRecord {
         var annotation: DiffAnnotation<AnnotationID>
@@ -112,8 +121,12 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
         }
         self.items = items
         self.annotations = annotations
-        let (changed, removed) = layoutModel.setItems(items, annotations: groupAnnotations(annotations))
-        for item in changed + removed { cancelHighlight(item.id) }
+        let (changed, grown, removed) = layoutModel.setItems(items, annotations: groupAnnotations(annotations))
+        for item in changed + removed {
+            cancelHighlight(item.id)
+            growthStreams.removeValue(forKey: item.id)?.task?.cancel()
+        }
+        for (item, appended) in grown { highlightGrowth(of: item, appended: appended) }
         for item in removed {
             accessoryHosts.removeValue(forKey: item.id)?.view.removeFromSuperview()
         }
@@ -405,7 +418,7 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
     private func requestHighlights() {
         let visible = viewport
         let reach = visible.height * (configuration.overscan + configuration.prefetch)
-        for item in layoutModel.items(in: visible.minY - reach, visible.maxY + reach) where item.highlighted == nil && !item.isCollapsed {
+        for item in layoutModel.items(in: visible.minY - reach, visible.maxY + reach) where item.highlighted == nil && !item.isCollapsed && growthStreams[item.id] == nil {
             requestHighlight(item, immediately: highlightsImmediately && item.top < visible.maxY && item.bottom > visible.minY)
         }
     }
@@ -448,15 +461,56 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
             }
         case .file(let file, let lineCount, let options, let plainText):
             if immediately, !plainText, let result = service.immediateResult(for: file, lineCount: lineCount, options: options, lineLimit: limit) {
-                applyHighlight(.file(result), to: id, generation: generation)
+                applyHighlight(.file(result.lines), to: id, generation: generation)
                 return
             }
             task = Task { [weak self] in
                 guard let result = try? await service.highlight(file, options: options, plainText: plainText) else { return }
-                self?.applyHighlight(.file(result), to: id, generation: generation)
+                self?.applyHighlight(.file(result.lines), to: id, generation: generation)
             }
         }
         highlightTasks[id] = (generation, task)
+    }
+
+    /// Highlights only what a file gained. Its first growth streams the
+    /// whole file once; later ones stream the new text.
+    private func highlightGrowth(of item: ItemModel, appended: String) {
+        guard case .file(let file) = item.item.content, item.shape.totalLines <= configuration.tokenizeMaxLength else { return }
+        cancelHighlight(item.id)
+        if growthStreams[item.id] == nil {
+            guard let stream = try? highlightService.stream(for: file, options: configuration.renderFileOptions) else { return }
+            growthStreams[item.id] = GrowthStream(stream: stream, pending: file.contents)
+        } else {
+            growthStreams[item.id]?.pending += appended
+        }
+        guard growthStreams[item.id]?.task == nil, let stream = growthStreams[item.id]?.stream else { return }
+        let id = item.id
+        growthStreams[id]?.task = Task { [weak self] in
+            while let text = self?.takePendingGrowth(id) {
+                guard let (first, lines) = try? await stream.append(text), !Task.isCancelled else { return }
+                self?.applyGrowth(first: first, lines: lines, to: id)
+            }
+        }
+    }
+
+    private func takePendingGrowth(_ id: String) -> String? {
+        guard let text = growthStreams[id]?.pending, !text.isEmpty else {
+            growthStreams[id]?.task = nil
+            return nil
+        }
+        growthStreams[id]?.pending = ""
+        return text
+    }
+
+    private func applyGrowth(first: Int, lines: [HighlightedLine], to id: String) {
+        guard let item = layoutModel.item(id) else { return }
+        item.setHighlightedLines(from: first, lines)
+        if configuration.overflow == .wrap {
+            item.needsLayout = true
+            relayout()
+        } else if let row = item.row(forLineNumber: first + 1, side: nil), let frame = item.rowFrame(row, showsHeaders: configuration.showsHeaders, width: documentView.bounds.width) {
+            documentView.setNeedsDisplay(CGRect(x: 0, y: frame.minY, width: frame.width, height: item.bottom - frame.minY))
+        }
     }
 
     private func applyHighlight(_ highlighted: Highlighted, to id: String, generation: Int) {

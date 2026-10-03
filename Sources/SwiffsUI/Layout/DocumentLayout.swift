@@ -28,15 +28,18 @@ final class DocumentLayout {
     /// Takes new items and their annotations, keeping the state of items
     /// whose id remains. Returns the items whose content changed and those
     /// removed.
-    func setItems(_ newItems: [DiffItem], annotations: [String: [AnnotationKey: [AnyHashable]]]) -> (changed: [ItemModel], removed: [ItemModel]) {
+    func setItems(_ newItems: [DiffItem], annotations: [String: [AnnotationKey: [AnyHashable]]]) -> (changed: [ItemModel], grown: [(ItemModel, String)], removed: [ItemModel]) {
         var previous = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         var changed: [ItemModel] = []
+        var grown: [(ItemModel, String)] = []
         items = newItems.map { newItem in
             let model: ItemModel
             if let existing = previous.removeValue(forKey: newItem.id) {
-                let contentChanged = existing.item.content != newItem.content
-                _ = existing.update(newItem, configuration: configuration)
-                if contentChanged { changed.append(existing) }
+                switch existing.update(newItem, configuration: configuration) {
+                case .none: break
+                case .replaced: changed.append(existing)
+                case .grew(let appended): grown.append((existing, appended))
+                }
                 model = existing
             } else {
                 model = ItemModel(item: newItem, configuration: configuration)
@@ -46,7 +49,7 @@ final class DocumentLayout {
             return model
         }
         indexByID = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($1.id, $0) })
-        return (changed, Array(previous.values))
+        return (changed, grown, Array(previous.values))
     }
 
     func setConfiguration(_ configuration: DiffConfiguration, style: StyleContext) {

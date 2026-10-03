@@ -12,7 +12,7 @@ Each step ends with `swift test` passing and its docs true. Manta stays on its p
 - [x] R5 Hunk expansion, scroll targets with smooth scrolling, the sticky header, horizontal scrolling, wrapping
 - [ ] R6 `DiffList` and `swiffs-snapshot` (done); `SwiffsDemo`; Manta moves to `DiffList` and deletes its own wrapper
 - [x] R7 Conflicted files
-- [ ] R8 Growing files
+- [x] R8 Growing files
 - [ ] R9 Tag `0.1.0`
 
 Later: editing ([requirements](requirements.md#later-waits-for-a-user)).

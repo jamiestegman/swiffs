@@ -16,7 +16,7 @@ Swiffs has four modules. The lower three port upstream libraries and are held to
 The isolation map ([S3](decisions.md)):
 
 - **Core**: every public type is a `Sendable` value. A cache shared across threads is a `Mutex`.
-- **Highlight**: grammars and themes are immutable once loaded; the registry is a `Mutex`. A highlighter belongs to one `HighlightWorker` actor and is never shared. `HighlightService` is the only code that starts work off the caller's thread. Its `highlight(_:options:)` is `async` and `@concurrent`, runs on the least loaded of a bounded set of workers, and gives requests for the same content key one shared task and one cached result. Within one call, a large diff may tokenize its two sides on two threads with a synchronous fork-join.
+- **Highlight**: grammars and themes are immutable once loaded; the registry is a `Mutex`. A highlighter belongs to one `HighlightWorker` or `HighlightStream` actor and is never shared. `HighlightService` and the streams it vends are the only code that starts work off the caller's thread. Its `highlight(_:options:)` is `async` and `@concurrent`, runs on the least loaded of a bounded set of workers, and gives requests for the same content key one shared task and one cached result. Within one call, a large diff may tokenize its two sides on two threads with a synchronous fork-join.
 - **Documented exceptions** in the lower modules, each with its reason at the declaration: compiled Oniguruma regexes are `@unchecked Sendable` (Oniguruma only reads them while searching), the tokenizer's initial state is a never-mutated `nonisolated(unsafe)` sentinel, and edit-prediction patterns wrap an immutable `NSRegularExpression`.
 - **Editor**: model types used from one isolation domain at a time (the main actor, once the UI uses them).
 - **UI**: the target sets `.defaultIsolation(MainActor.self)`. It awaits `HighlightService` from tasks the view owns, and cancels them when an item leaves or changes. Nothing else crosses threads.
@@ -80,6 +80,7 @@ One view shows a list of items. An item is a diff, a file or a file with merge c
   - Items within the overscan and prefetch distance are highlighted on `HighlightService` before they scroll in.
   - Content an update shows is highlighted at once when it is small (`synchronousHighlightLineLimit`), so it never appears plain. While scrolling, nothing highlights on the main thread.
   - Until its highlighting arrives, a line draws in the theme's foreground colour. The colours then fill in without moving anything.
+- **Growing files** ([S13](decisions.md)): when a file item's new content extends its old content, the item grows in place. Lines before the last old line keep their rows, layouts and highlighting, and a `HighlightStream` tokenizes only the appended text, carrying the grammar state across appends.
 
 ### Hosted content: the layout contract
 

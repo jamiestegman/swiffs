@@ -19,7 +19,16 @@ struct ConflictedFile {
 /// An item's highlighted lines.
 enum Highlighted {
     case diff(ThemedDiffResult)
-    case file(ThemedFileResult)
+    /// A file's lines; nil for lines not highlighted yet.
+    case file([HighlightedLine?])
+}
+
+/// How an item's content changed.
+enum ContentChange {
+    case none
+    case replaced
+    /// A file gained text at its end.
+    case grew(appended: String)
 }
 
 /// An item's rows and their heights at one width.
@@ -95,23 +104,61 @@ final class ItemModel {
 
     // MARK: Updates
 
-    /// Takes a new value for the item. Returns whether anything visible
-    /// changed.
-    func update(_ newItem: DiffItem, configuration: DiffConfiguration) -> Bool {
-        guard newItem != item else { return false }
-        let contentChanged = newItem.content != item.content
+    /// Takes a new value for the item and says how its content changed.
+    @discardableResult
+    func update(_ newItem: DiffItem, configuration: DiffConfiguration) -> ContentChange {
+        guard newItem != item else { return .none }
+        let old = item
         item = newItem
         needsLayout = true
-        if contentChanged {
-            (source, parseFailure) = Self.parse(newItem.content)
-            shape = Self.shape(source, configuration: configuration)
-            expandedHunks = [:]
-            highlighted = nil
-            generation += 1
-            invalidateRows()
-            dropLineLayouts()
+        if case .file(let file) = newItem.content, let appended = appendedText(from: old.content, to: newItem.content) {
+            grow(file, appended: appended)
+            return .grew(appended: appended)
         }
-        return true
+        guard newItem.content != old.content else { return .none }
+        (source, parseFailure) = Self.parse(newItem.content)
+        shape = Self.shape(source, configuration: configuration)
+        expandedHunks = [:]
+        highlighted = nil
+        generation += 1
+        invalidateRows()
+        dropLineLayouts()
+        return .replaced
+    }
+
+    /// The text a file gained at its end, if that is all that changed.
+    private func appendedText(from old: DiffItem.Content, to new: DiffItem.Content) -> String? {
+        guard case .file(let oldFile) = old, case .file(let newFile) = new, oldFile.name == newFile.name, oldFile.lang == newFile.lang,
+              newFile.contents.utf8.count > oldFile.contents.utf8.count, newFile.contents.hasPrefix(oldFile.contents)
+        else { return nil }
+        return String(newFile.contents.utf8.dropFirst(oldFile.contents.utf8.count))
+    }
+
+    /// Appends text to a file, keeping every line before the last one as it
+    /// was: its row, layout and highlighting.
+    private func grow(_ file: FileContents, appended: String) {
+        guard case .file(_, var lines) = source else { return }
+        let last = lines.popLast() ?? ""
+        let firstChanged = lines.count
+        lines.append(contentsOf: linesFromFileContents(last + appended))
+        source = .file(file, lines: lines)
+        shape.totalLines = lines.count
+        if case .file(var highlightedLines)? = highlighted {
+            highlightedLines.removeSubrange(min(firstChanged, highlightedLines.count)...)
+            highlighted = .file(highlightedLines)
+        }
+        lineLayouts = lineLayouts.filter { $0.key.lineIndex < firstChanged }
+        invalidateRows()
+    }
+
+    /// Replaces a file's highlighting from a line on.
+    func setHighlightedLines(from first: Int, _ lines: [HighlightedLine]) {
+        var highlightedLines: [HighlightedLine?]
+        if case .file(let existing)? = highlighted { highlightedLines = existing } else { highlightedLines = [] }
+        if highlightedLines.count < first { highlightedLines.append(contentsOf: [HighlightedLine?](repeating: nil, count: first - highlightedLines.count)) }
+        highlightedLines.replaceSubrange(first..., with: lines.map { Optional($0) })
+        highlighted = .file(highlightedLines)
+        lineLayouts = lineLayouts.filter { $0.key.lineIndex < first }
     }
 
     /// Replaces the diff with one whose full files are loaded, keeping
@@ -375,8 +422,8 @@ final class ItemModel {
         case .diff(let result)?:
             let lines = side == .deletions ? result.deletionLines : result.additionLines
             if lineIndex < lines.count, let line = lines[lineIndex] { return line }
-        case .file(let result)?:
-            if lineIndex < result.lines.count, let line = result.lines[lineIndex] { return line }
+        case .file(let lines)?:
+            if lineIndex < lines.count, let line = lines[lineIndex] { return line }
         case nil:
             break
         }

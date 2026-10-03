@@ -19,7 +19,7 @@ public protocol BracketIgnoredRangesProvider {
     func getStringCommentRegexpRangesInLine(_ line: Int) -> [(start: Int, end: Int)]?
 }
 
-extension EditorTokenizer: BracketIgnoredRangesProvider {}
+extension EditorTokenizer: @MainActor BracketIgnoredRangesProvider {}
 
 /// Ranges of the bracket at the caret and its partner
 /// (`findBracketMatchRanges`).

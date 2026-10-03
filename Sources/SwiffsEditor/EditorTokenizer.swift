@@ -69,8 +69,8 @@ private enum BracketRangesCache {
     case ranges([(start: Int, end: Int)])
 }
 
-/// `EditorTokenizer`. Not thread safe; use from one thread (the main thread
-/// in the editor view).
+/// `EditorTokenizer`, on the main actor like the editor view that drives it.
+@MainActor
 public final class EditorTokenizer<Annotation> {
     public let highlighter: DiffsHighlighter
     public let document: TextDocument<Annotation>
@@ -81,11 +81,11 @@ public final class EditorTokenizer<Annotation> {
     public private(set) var themeColors: EditorThemeColors?
 
     /// Lines re-tokenized outside `tokenize` (offscreen and background).
-    public var onDeferTokenize: (([Int: [EditorLineToken]], ThemeKind) -> Void)?
+    public var onDeferTokenize: (@MainActor ([Int: [EditorLineToken]], ThemeKind) -> Void)?
     /// Called after the theme changed.
-    public var onThemeChange: (() -> Void)?
+    public var onThemeChange: (@MainActor () -> Void)?
     /// Runs background work later (upstream: `postMessage`).
-    public var scheduler: (@escaping () -> Void) -> Void = { work in DispatchQueue.main.async(execute: work) }
+    public var scheduler: (@escaping @MainActor () -> Void) -> Void = { work in DispatchQueue.main.async { work() } }
 
     private var grammar: Grammar?
     private var colorMap: [String] = []

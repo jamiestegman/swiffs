@@ -368,9 +368,7 @@ public final class DiffsEditor<Annotation: EditorLineAnnotationPosition>: GridEd
         try? highlighter.prepare(langs: [document.languageId], themes: [host.editorTheme.name])
         self.highlighter = highlighter
         let tokenizer = EditorTokenizer(highlighter: highlighter, document: document, themeName: host.editorTheme.name, themeType: host.editorTheme.kind, matchBrackets: options.matchBrackets)
-        tokenizer.onDeferTokenize = { [weak self] lines, _ in
-            MainActor.assumeIsolated { self?.applyTokens(lines) }
-        }
+        tokenizer.onDeferTokenize = { [weak self] lines, _ in self?.applyTokens(lines) }
         self.tokenizer = tokenizer
         let retainedView = session.editor
         selections = [EditorSelection(caret: Position(line: 0, character: 0))]

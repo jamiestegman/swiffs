@@ -92,7 +92,7 @@ struct EditorFeaturesParityTests {
         (value as! [[Any]]).sorted { ($0[0] as! Int) < ($1[0] as! Int) }
     }
 
-    @Test func tokenizerAndBracketsMatchUpstream() throws {
+    @MainActor @Test func tokenizerAndBracketsMatchUpstream() throws {
         let highlighter = DiffsHighlighter()
         try highlighter.prepare(langs: ["typescript", "python"], themes: ["pierre-dark", "pierre-light"])
         for testCase in Self.fixture["tokenizerCases"] as! [[String: Any]] {

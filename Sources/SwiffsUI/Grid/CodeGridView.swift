@@ -121,7 +121,7 @@ final class CodeGridView: NSView {
         self.style = style
         super.init(frame: .zero)
         wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layerContentsRedrawPolicy = .duringViewResize
     }
 
     @available(*, unavailable)

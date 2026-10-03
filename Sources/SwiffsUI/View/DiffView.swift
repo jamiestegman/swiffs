@@ -199,7 +199,7 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
 
     private func annotationHeightChanged(_ token: AnyHashable) {
         guard let record = annotationHosts[token], let item = layoutModel.item(record.annotation.itemID) else { return }
-        item.needsLayout = true
+        item.annotationHeightChanged()
         relayout()
     }
 
@@ -478,7 +478,7 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
                 return
             }
             task = Task { [weak self] in
-                guard let result = try? await service.highlight(diff, options: options, plainText: plainText) else { return }
+                guard let result = try? await service.highlight(diff, options: options, plainText: plainText), !Task.isCancelled else { return }
                 self?.applyHighlight(.diff(result), to: id, generation: generation)
             }
         case .file(let file, let lineCount, let options, let plainText):
@@ -487,7 +487,7 @@ public final class DiffView<AnnotationID: Hashable & Sendable, Annotation: View,
                 return
             }
             task = Task { [weak self] in
-                guard let result = try? await service.highlight(file, options: options, plainText: plainText) else { return }
+                guard let result = try? await service.highlight(file, options: options, plainText: plainText), !Task.isCancelled else { return }
                 self?.applyHighlight(.file(result.lines), to: id, generation: generation)
             }
         }

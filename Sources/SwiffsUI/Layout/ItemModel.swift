@@ -211,6 +211,12 @@ final class ItemModel {
         if wraps { needsLayout = true }
     }
 
+    /// An annotation's content changed height.
+    func annotationHeightChanged() {
+        releasedBodyHeight = nil
+        needsLayout = true
+    }
+
     func invalidateRows() {
         rowsAreStale = true
         releasedBodyHeight = nil

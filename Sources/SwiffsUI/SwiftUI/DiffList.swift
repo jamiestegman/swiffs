@@ -4,7 +4,7 @@ import SwiffsCore
 
 /// Where a diff list is scrolled: the item at the top, kept current by the
 /// list, and a target to scroll to.
-public struct DiffScrollPosition: Equatable {
+public struct DiffScrollPosition: Equatable, Sendable {
     public private(set) var target: DiffScrollTarget?
     /// The item at the top of the viewport.
     public internal(set) var itemID: String?

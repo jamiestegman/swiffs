@@ -10,7 +10,7 @@ Each step ends with `swift test` passing and its docs true. Manta stays on its p
 - [x] R3 Hosted content and the layout contract, tested in a SwiftUI-hosted window; annotations, header accessories, collapsed items
 - [x] R4 Hover, line selection, the gutter action button, text selection and copy, accessibility
 - [x] R5 Hunk expansion, scroll targets with smooth scrolling, the sticky header, horizontal scrolling, wrapping
-- [ ] R6 `DiffList`, `swiffs-snapshot` and `SwiffsDemo` (done); Manta moves to `DiffList` and deletes its own wrapper
+- [x] R6 `DiffList`, `swiffs-snapshot` and `SwiffsDemo`; Manta moves to `DiffList` and deletes its own wrapper (on Manta's `swiffs-native-ui` branch, pinned to this module's first complete commit)
 - [x] R7 Conflicted files
 - [x] R8 Growing files
 - [ ] R9 Tag `0.1.0`

@@ -189,9 +189,9 @@ public final class CodeView<Metadata>: NSView {
     private var selection: CodeViewLineSelection?
     private var layoutWidth: CGFloat = 0
     private var isUpdating = false
-    private var scrollAnimation: (position: CGFloat, velocity: CGFloat, lastTimestamp: CFTimeInterval)?
+    private(set) var scrollAnimation: (position: CGFloat, velocity: CGFloat, lastTimestamp: CFTimeInterval)?
     private var pendingScrollTarget: CodeViewScrollTarget?
-    private var displayTimer: Timer?
+    private var animationLink: CADisplayLink?
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -382,7 +382,7 @@ public final class CodeView<Metadata>: NSView {
         if scrollAnimation == nil {
             scrollAnimation = (scrollTop, 0, CACurrentMediaTime() * 1000)
         }
-        startAnimationTimer()
+        startAnimation()
     }
 
     private func behaviorOf(_ target: CodeViewScrollTarget) -> CodeViewScrollBehavior {
@@ -504,29 +504,32 @@ public final class CodeView<Metadata>: NSView {
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    private func startAnimationTimer() {
-        guard displayTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.stepAnimation() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        displayTimer = timer
+    /// Steps the scroll animation once per display refresh.
+    private func startAnimation() {
+        guard animationLink == nil else { return }
+        let link = displayLink(target: self, selector: #selector(animationFrame(_:)))
+        link.add(to: .main, forMode: .common)
+        animationLink = link
+    }
+
+    @objc private func animationFrame(_ link: CADisplayLink) {
+        stepAnimation(at: link.targetTimestamp * 1000)
     }
 
     private func stopAnimation() {
-        displayTimer?.invalidate()
-        displayTimer = nil
+        animationLink?.invalidate()
+        animationLink = nil
         scrollAnimation = nil
         pendingScrollTarget = nil
     }
 
     /// Closed-form critically damped spring step (`computeSpringStep`).
-    private func stepAnimation() {
+    /// Advances the scroll spring to `now`, in milliseconds of media time.
+    func stepAnimation(at now: Double) {
         guard let target = pendingScrollTarget, var animation = scrollAnimation, let destination = resolveTop(target) else {
             stopAnimation()
             return
         }
-        let now = CACurrentMediaTime() * 1000
         let dt = max(0, now - animation.lastTimestamp)
         let omega = options.smoothScrollSettings.omega
         let decay = exp(-omega * dt)
@@ -547,7 +550,7 @@ public final class CodeView<Metadata>: NSView {
 
     public override func scrollWheel(with event: NSEvent) {
         // User scrolling cancels programmatic smooth scrolling.
-        if displayTimer != nil { stopAnimation() }
+        if animationLink != nil { stopAnimation() }
         super.scrollWheel(with: event)
     }
 

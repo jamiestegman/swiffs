@@ -33,4 +33,21 @@ struct SmoothScrollTests {
         }
         #expect(abs(code.scrollTop - destination) < 0.5)
     }
+
+    @Test func eachFrameMovesTheSpringTowardItsDestinationUntilItSettles() throws {
+        let (window, code, destination) = shown()
+        defer { window.close() }
+        code.scrollTo(.position(300, behavior: .smooth))
+        var now = try #require(code.scrollAnimation).lastTimestamp
+        var tops: [CGFloat] = []
+        for _ in 0 ..< 240 where code.scrollAnimation != nil {
+            now += 1000 / 60
+            code.stepAnimation(at: now)
+            tops.append(code.scrollTop)
+        }
+        #expect(code.scrollAnimation == nil, "it settles within four seconds of frames")
+        #expect(tops.last == destination)
+        #expect(tops.count > 10, "over many frames, not one jump")
+        #expect(zip(tops, tops.dropFirst()).allSatisfy { $0 <= $1 }, "without overshooting back")
+    }
 }

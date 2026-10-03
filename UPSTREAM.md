@@ -44,7 +44,10 @@ Versions from upstream's `pnpm-lock.yaml` at the baseline commit.
 - Regenerate the fixtures (`Scripts/fixtures`) from the new commit in the
   same change, so tests always compare against the stated baseline.
 - Update the baseline and the tables above when a release is fully ported.
-- Changes to web-only code (DOM, React, SSR, workers, CSS) have no Swift
-  counterpart; note them as skipped instead of porting them.
+- Port changes to the diff model, parsing, highlighting and the editor model.
+  Changes to components, the DOM, React, SSR, workers and CSS are not
+  ported: `SwiffsUI` is a native design that matches upstream's look, not
+  its components (`docs/decisions.md`, S1). Note them as skipped, and port
+  a visible change to the look by hand.
 - Where Swiffs deliberately differs from upstream, record the difference
   here.

@@ -32,6 +32,10 @@ policy.
 
 ## Views
 
+`SwiffsUI` is being rebuilt as one native view over diff, file and
+conflicted-file items; see `docs/architecture.md` and `docs/plan.md`. The
+views below are the ported ones it replaces.
+
 | Upstream              | Swiffs |
 | --------------------- | ------ |
 | `FileDiff`            | `FileDiffView` / `DiffsFileDiff` (SwiftUI) |

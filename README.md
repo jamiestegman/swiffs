@@ -72,7 +72,7 @@ struct Review: View {
 - Highlighting runs on `HighlightService`, ahead of scrolling. Give content a
   `cacheKey` to share results across views and refreshes.
 
-The ported views are tagged `legacy-ui`.
+The ported views were removed after commit `6873aa0`.
 
 ## Parity
 

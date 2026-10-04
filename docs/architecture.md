@@ -132,7 +132,7 @@ Annotations and header accessories are SwiftUI views, hosted by `AnnotationHost`
 | Look | `Scripts/visual-regression` renders cases with `swiffs-snapshot` and compares them pixel for pixel; images are never committed |
 | Time | Smooth scrolling steps with given timestamps; asynchronous highlighting is awaited by yielding. No test sleeps |
 | Concurrency | `SwiffsHighlight` concurrency tests under Thread Sanitizer in CI; a test fails if `SwiffsUI` uses a banned construct |
-| Performance | Scrolling and first frame of 300 files, measured in Release against the `legacy-ui` view |
+| Performance | Scrolling and first frame of 300 files, measured in Release against the ported view at `6873aa0` |
 | Parity | Golden fixtures for Core and Highlight, unchanged |
 
 `swift test --filter SwiffsUITests` runs the view's tests in about a second.
